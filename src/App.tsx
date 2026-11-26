@@ -199,7 +199,7 @@ function App({ user }: { user: User }) {
     setAiBusy(true);
     try {
       const [schemeDoc, paperDoc] = await Promise.all([extractDocument(schemeFile), extractDocument(paperFile)]);
-      const { data, error } = await supabase.functions.invoke('ai-grade', { body: { schemeText: schemeDoc.text, schemeImages: schemeDoc.images, paperText: paperDoc.text, paperImages: paperDoc.images } });
+      const { data, error } = await supabase.functions.invoke('ai-grade', { body: { schemeText: schemeDoc.text, schemeImages: schemeDoc.images, paperText: paperDoc.text, paperImages: paperDoc.images, sourceWarnings: [...schemeDoc.warnings, ...paperDoc.warnings] } });
       if (error) throw new Error(data?.error || error.message);
       if (data?.error) throw new Error(data.error);
       if (!Array.isArray(data?.questions) || !data.questions.length) throw new Error('The AI did not return question-level marks.');
