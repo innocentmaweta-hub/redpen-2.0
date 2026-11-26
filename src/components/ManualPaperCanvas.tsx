@@ -20,7 +20,7 @@ export default function ManualPaperCanvas({ file, annotations, onChange }: Props
   const paperRef = useRef<HTMLCanvasElement>(null);
   const inkRef = useRef<HTMLCanvasElement>(null);
   const [tool, setTool] = useState<Tool>('pen');
-  const [color, setColor] = useState('#ef4444');
+  const [color, setColor] = useState('#dc4545');
   const [size, setSize] = useState(3);
   const [page, setPage] = useState(1);
   const [pageCount, setPageCount] = useState(1);
@@ -166,7 +166,7 @@ export default function ManualPaperCanvas({ file, annotations, onChange }: Props
     const ctx = inkRef.current.getContext('2d');
     if (!ctx) return;
     if (tool === 'tick' || tool === 'cross') {
-      ctx.strokeStyle = tool === 'tick' ? '#10b981' : '#ef4444';
+      ctx.strokeStyle = tool === 'tick' ? '#159b68' : '#dc4545';
       ctx.lineWidth = Math.max(3, size * 1.5); ctx.lineCap = 'round'; ctx.beginPath();
       if (tool === 'tick') { ctx.moveTo(point.x - 12, point.y); ctx.lineTo(point.x - 2, point.y + 12); ctx.lineTo(point.x + 18, point.y - 14); }
       else { ctx.moveTo(point.x - 11, point.y - 11); ctx.lineTo(point.x + 11, point.y + 11); ctx.moveTo(point.x + 11, point.y - 11); ctx.lineTo(point.x - 11, point.y + 11); }
