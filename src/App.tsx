@@ -387,7 +387,7 @@ function App({ user }: { user: User }) {
       const { data, error } = await supabase.storage.from('redpen-assessment-files').download(file.storagePath);
       if (error || !data) throw error || new Error('Could not download the paper.');
       const extension = file.name.split('.').pop()?.toLowerCase() || '';
-      const mimeType = data.type || (extension === 'pdf' ? 'application/pdf' : extension === 'png' ? 'image/png' : extension === 'webp' ? 'image/webp' : extension === 'gif' ? 'image/gif' : 'image/jpeg');
+      const mimeType = data.type && data.type !== 'application/octet-stream' ? data.type : (extension === 'pdf' ? 'application/pdf' : extension === 'png' ? 'image/png' : extension === 'webp' ? 'image/webp' : extension === 'gif' ? 'image/gif' : 'image/jpeg');
       if (mimeType !== 'application/pdf' && !mimeType.startsWith('image/')) throw new Error('Preview is available for PDF and image papers only.');
       setBatchPreview({ name: file.name, url: URL.createObjectURL(data), mimeType });
     } catch (cause) {
