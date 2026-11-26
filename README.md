@@ -39,7 +39,7 @@ VITE_SUPABASE_URL=https://kckljigwklpezqvaorao.supabase.co
 VITE_SUPABASE_PUBLISHABLE_KEY=your_supabase_publishable_key
 ```
 
-See `.env.example` for the template. Never add a Supabase service-role or secret key to Vite variables.
+See `.env.example` for the template. Never add a Supabase service-role or secret key to Vite variables.\n\nBefore production sign-up and password recovery, add the deployed RedPen domain to **Supabase Dashboard → Authentication → URL Configuration** as the Site URL and an allowed Redirect URL. The app returns confirmation and password-reset links to the active site origin.
 
 ## Development
 
