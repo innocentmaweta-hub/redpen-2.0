@@ -196,6 +196,7 @@ create policy "Reports insert own" on storage.objects for insert to authenticate
 create policy "Reports select own" on storage.objects for select to authenticated using(bucket_id='redpen-generated-reports' and (storage.foldername(name))[1]=(select auth.uid())::text);
 create policy "Reports delete own" on storage.objects for delete to authenticated using(bucket_id='redpen-generated-reports' and (storage.foldername(name))[1]=(select auth.uid())::text);
 
+alter publication supabase_realtime add table public.workspace_snapshots;
 alter publication supabase_realtime add table public.grading_results;
 alter publication supabase_realtime add table public.batch_jobs;
 alter publication supabase_realtime add table public.batch_job_files;
