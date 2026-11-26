@@ -58,7 +58,7 @@ function App({ user }: { user: User }) {
   const [toast, setToast] = useState('');
   const [mobileNav, setMobileNav] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
-  const [aiGradingMeta, setAiGradingMeta] = useState<{ provider: string; model: string; usage: unknown } | null>(null);
+  const [aiGradingMeta, setAiGradingMeta] = useState<{ provider: string; model: string; usage: unknown; needsReview: boolean; reviewNotes: string[] } | null>(null);
   const [batchScheme, setBatchScheme] = useState<File | null>(null);
   const [batchBusy, setBatchBusy] = useState(false);
   const [institutions, setInstitutions] = useState<{ id: string; name: string; owner_id: string }[]>([]);
@@ -159,7 +159,7 @@ function App({ user }: { user: User }) {
       setStudent(current => ({ name: data.student?.name || current.name || paperFile.name.replace(/\\.[^.]+$/, ''), id: data.student?.id || current.id, className: data.student?.className || current.className }));
       setQuestions(marks);
       setOverallFeedback(String(data.overallFeedback || ''));
-      setAiGradingMeta({ provider: data.provider || 'AI provider', model: data.model || 'configured model', usage: data.usage || null });
+      setAiGradingMeta({ provider: data.provider || 'AI provider', model: data.model || 'configured model', usage: data.usage || null, needsReview: Boolean(data.needsReview), reviewNotes: Array.isArray(data.reviewNotes) ? data.reviewNotes : [] });
       setMode('ai');
       setToast(data.needsReview ? 'AI draft completed. Review the flagged items carefully before saving.' : 'AI marking draft completed. Review every question before saving.');
       return data;
@@ -197,7 +197,7 @@ function App({ user }: { user: User }) {
         id: assessmentId, owner_id: user.id, workbook_id: activeWorkbook?.id || null,
         course_id: activeCourse.id, student_id: studentRow.id,
         marking_scheme_path: schemePath, answer_paper_path: paperPath,
-        paper_filename: paper?.name || null, status: 'completed',
+        paper_filename: paper?.name || null, status: aiGradingMeta?.needsReview ? 'needs_review' : 'completed',
       });
       if (assessmentError) {
         await supabase.from('students').delete().eq('id', studentRow.id);
@@ -223,9 +223,9 @@ function App({ user }: { user: User }) {
       if (aiGradingMeta) {
         const { error: aiLogError } = await supabase.from('ai_grading_runs').insert({
           owner_id: user.id, assessment_id: assessmentId, provider: aiGradingMeta.provider,
-          model: aiGradingMeta.model, status: 'completed',
+          model: aiGradingMeta.model, status: aiGradingMeta.needsReview ? 'needs_review' : 'completed',
           input_summary: { marking_scheme: Boolean(schemePath), answer_paper: Boolean(paperPath) },
-          output_summary: { question_count: questions.length, percentage, review_required: false },
+          output_summary: { question_count: questions.length, percentage, review_required: aiGradingMeta.needsReview, review_notes: aiGradingMeta.reviewNotes },
         });
         if (aiLogError) console.warn('Could not write AI audit record:', aiLogError.message);
       }
