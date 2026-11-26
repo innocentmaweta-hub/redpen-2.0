@@ -4,7 +4,7 @@ import { supabase } from './lib/supabase';
 import {
   Activity, Archive, ArrowLeft, Award, BarChart3, BookOpen, Bot, Check, CheckCircle2,
   ChevronDown, ChevronRight, CircleHelp, ClipboardList, Clock3, FilePlus2, FileText,
-  FolderOpen, GraduationCap, LayoutDashboard, LogOut, Menu, MessageSquare, MoreHorizontal,
+  FolderOpen, GraduationCap, Layers, LayoutDashboard, LogOut, Menu, MessageSquare, MoreHorizontal,
   PanelLeftClose, Plus, Printer, Save, Search, Settings, ShieldCheck, Sparkles, Trash2,
   Upload, Users, X, Zap
 } from 'lucide-react';
