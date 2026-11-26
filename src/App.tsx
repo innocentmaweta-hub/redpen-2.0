@@ -9,14 +9,17 @@ import {
   Upload, Users, X, Zap
 } from 'lucide-react';
 import logo from './assets/logo.png';
+import { extractDocument } from './lib/documentReader';
+import { exportResultsExcel, exportResultsPdf } from './lib/reportExports';
+import './features.css';
 
-type Screen = 'dashboard' | 'grade' | 'results' | 'history' | 'batch' | 'settings';
+type Screen = 'dashboard' | 'grade' | 'results' | 'history' | 'batch' | 'institutions' | 'settings';
 type Question = { id: string; label: string; max: number; score: number; feedback: string };
 type Course = { id: string; code: string; name: string; year: string; term: string; schemeName?: string };
 type Workbook = { id: string; name: string; institution: string; createdAt: string; courses: Course[] };
 type Student = { name: string; id: string; className: string };
 type Result = { id: string; assessmentId?: string; schemePath?: string; paperPath?: string; student: Student; courseName: string; workbookName: string; date: string; questions: Question[]; total: number; maximum: number; percentage: number; grade: string; feedback: string; paperName: string; };
-type BatchFile = { id: string; name: string; size: number; status: 'Ready' | 'Needs review'; storagePath?: string; batchJobId?: string };
+type BatchFile = { id: string; name: string; size: number; status: 'Ready' | 'Processing' | 'Completed' | 'Needs review' | 'Failed'; storagePath?: string; batchJobId?: string };
 const STORE = 'redpen-2.0-workspace-v1';
 const uid = () => crypto.randomUUID();
 const starter: Workbook[] = [];
@@ -54,6 +57,16 @@ function App({ user }: { user: User }) {
   const [courseName, setCourseName] = useState('');
   const [toast, setToast] = useState('');
   const [mobileNav, setMobileNav] = useState(false);
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiGradingMeta, setAiGradingMeta] = useState<{ provider: string; model: string; usage: unknown } | null>(null);
+  const [batchScheme, setBatchScheme] = useState<File | null>(null);
+  const [batchBusy, setBatchBusy] = useState(false);
+  const [institutions, setInstitutions] = useState<{ id: string; name: string; owner_id: string }[]>([]);
+  const [activeInstitutionId, setActiveInstitutionId] = useState('');
+  const [memberEmail, setMemberEmail] = useState('');
+  const [members, setMembers] = useState<any[]>([]);
+  const [institutionBusy, setInstitutionBusy] = useState(false);
+  const [institutionName, setInstitutionName] = useState('');
 
   useEffect(() => {
     if (skipNextCloudSave.current) { skipNextCloudSave.current = false; return; }
@@ -84,17 +97,40 @@ function App({ user }: { user: User }) {
   useEffect(() => { if (!toast) return; const timer = window.setTimeout(() => setToast(''), 2800); return () => window.clearTimeout(timer); }, [toast]);
   useEffect(() => {
     let alive = true;
+    const loadInstitutions = async () => {
+      const { data, error } = await supabase.from('institutions').select('id,name,owner_id').order('created_at', { ascending: false });
+      if (!alive) return;
+      if (error) { console.error('Could not load institutions:', error.message); return; }
+      setInstitutions(data || []);
+      setActiveInstitutionId(current => current || data?.[0]?.id || '');
+    };
+    void loadInstitutions();
+    return () => { alive = false; };
+  }, [user.id]);
+  useEffect(() => {
+    if (!activeInstitutionId) { setMembers([]); return; }
+    let alive = true;
+    void supabase.functions.invoke('institution-admin', { body: { action: 'list_members', institutionId: activeInstitutionId } })
+      .then(({ data, error }) => {
+        if (!alive) return;
+        if (error || data?.error) { setMembers([]); return; }
+        setMembers(data?.members || []);
+      });
+    return () => { alive = false; };
+  }, [activeInstitutionId]);
+  useEffect(() => {
+    let alive = true;
     const loadLatestBatch = async () => {
       const { data, error } = await supabase.from('batch_jobs')
-        .select('id, batch_job_files(id,original_filename,file_size_bytes,status,storage_path)')
-        .eq('owner_id', user.id).order('created_at', { ascending: false }).limit(1).maybeSingle();
+        .select('id, marking_scheme_path, batch_job_files(id,original_filename,file_size_bytes,status,storage_path)')
+        .eq('owner_id', user.id).order('created_at', { ascending: false }).limit(20);
       if (!alive) return;
       if (error) { console.error('Could not load batch queue:', error.message); return; }
-      if (data) setBatchFiles((data.batch_job_files || []).map(file => ({
+      setBatchFiles((data || []).flatMap(job => (job.batch_job_files || []).map(file => ({
         id: file.id, name: file.original_filename, size: Number(file.file_size_bytes || 0),
-        status: file.status === 'needs_review' ? 'Needs review' as const : 'Ready' as const,
-        storagePath: file.storage_path, batchJobId: data.id,
-      })));
+        status: file.status === 'completed' ? 'Completed' as const : file.status === 'processing' ? 'Processing' as const : file.status === 'failed' ? 'Failed' as const : file.status === 'needs_review' ? 'Needs review' as const : 'Ready' as const,
+        storagePath: file.storage_path, batchJobId: job.id,
+      }))));
     };
     void loadLatestBatch();
     return () => { alive = false; };
@@ -106,7 +142,7 @@ function App({ user }: { user: User }) {
   const percentage = totalMarks ? Math.round(earnedMarks / totalMarks * 1000) / 10 : 0;
   const filteredResults = useMemo(() => results.filter(r => [r.student.name, r.student.id, r.courseName, r.grade].join(' ').toLowerCase().includes(search.toLowerCase())), [results, search]);
   const navigate = (next: Screen) => { setScreen(next); setMobileNav(false); };
-  const startGrading = () => { setStudent({ name: '', id: '', className: '' }); setScheme(null); setPaper(null); setPaperUrl(''); setQuestions([{ id: uid(), label: 'Question 1', max: 10, score: 0, feedback: '' }]); setOverallFeedback(''); navigate('grade'); };
+  const startGrading = () => { setStudent({ name: '', id: '', className: '' }); setScheme(null); setPaper(null); setPaperUrl(''); setQuestions([{ id: uid(), label: 'Question 1', max: 10, score: 0, feedback: '' }]); setOverallFeedback(''); setMode('manual'); setAiGradingMeta(null); navigate('grade'); };
   const onPaper = (file?: File) => { if (!file) return; if (file.size > 25 * 1024 * 1024) { setToast('Please choose a file smaller than 25 MB.'); return; } setPaper(file); if (paperUrl) URL.revokeObjectURL(paperUrl); setPaperUrl(URL.createObjectURL(file)); };
   const saveResult = async () => {
     if (!student.name.trim()) { setToast('Enter the student name before saving.'); return; }
