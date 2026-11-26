@@ -67,6 +67,17 @@ function App({ user }: { user: User }) {
     return () => window.clearTimeout(timer);
   }, [workbooks, results, user.id]);
   useEffect(() => () => { if (paperUrl) URL.revokeObjectURL(paperUrl); }, [paperUrl]);
+  useEffect(() => {
+    const receiveCloudWorkspace = (event: Event) => {
+      const snapshot = (event as CustomEvent).detail;
+      if (snapshot && Array.isArray(snapshot.workbooks) && Array.isArray(snapshot.results)) {
+        setWorkbooks(snapshot.workbooks);
+        setResults(snapshot.results);
+      }
+    };
+    window.addEventListener('redpen-cloud-workspace', receiveCloudWorkspace);
+    return () => window.removeEventListener('redpen-cloud-workspace', receiveCloudWorkspace);
+  }, []);
   useEffect(() => { if (!toast) return; const timer = window.setTimeout(() => setToast(''), 2800); return () => window.clearTimeout(timer); }, [toast]);
   useEffect(() => {
     let alive = true;
