@@ -626,11 +626,29 @@ function App({ user }: { user: User }) {
       setBatchBusy(false);
     }
   };
+  const removeUnreferencedAssessmentFiles = async (paths: string[]) => {
+    const candidates = [...new Set(paths.filter(Boolean))];
+    if (!candidates.length) return;
+    const [paperRefs, schemeRefs] = await Promise.all([
+      supabase.from('assessments').select('answer_paper_path').in('answer_paper_path', candidates),
+      supabase.from('assessments').select('marking_scheme_path').in('marking_scheme_path', candidates),
+    ]);
+    if (paperRefs.error || schemeRefs.error) {
+      console.warn('Skipped document cleanup because assessment references could not be checked.', paperRefs.error || schemeRefs.error);
+      return;
+    }
+    const referenced = new Set([...(paperRefs.data || []).map(row => row.answer_paper_path), ...(schemeRefs.data || []).map(row => row.marking_scheme_path)].filter(Boolean));
+    const removable = candidates.filter(path => !referenced.has(path));
+    if (removable.length) {
+      const { error } = await supabase.storage.from('redpen-assessment-files').remove(removable);
+      if (error) console.warn('Could not remove unreferenced assessment documents:', error.message);
+    }
+  };
   const deleteBatchFile = async (id: string) => {
     const file = batchFiles.find(item => item.id === id);
     const { error } = await supabase.from('batch_job_files').delete().eq('id', id);
     if (error) { setToast(`Could not remove paper: ${error.message}`); return; }
-    if (file?.storagePath) await supabase.storage.from('redpen-assessment-files').remove([file.storagePath]);
+    if (file?.storagePath) await removeUnreferencedAssessmentFiles([file.storagePath]);
     setBatchFiles(current => current.filter(item => item.id !== id));
   };
   const clearBatch = async () => {
@@ -639,7 +657,7 @@ function App({ user }: { user: User }) {
     const paths = batchFiles.map(file => file.storagePath).filter((path): path is string => Boolean(path));
     const { error } = await supabase.from('batch_job_files').delete().in('id', ids);
     if (error) { setToast(`Could not clear batch: ${error.message}`); return; }
-    if (paths.length) await supabase.storage.from('redpen-assessment-files').remove(paths);
+    if (paths.length) await removeUnreferencedAssessmentFiles(paths);
     setBatchFiles([]);
   };
   const deleteResult = async (id: string) => {
@@ -648,7 +666,7 @@ function App({ user }: { user: User }) {
       const { error } = await supabase.from('assessments').delete().eq('id', row.assessmentId);
       if (error) { setToast(`Could not delete result: ${error.message}`); return; }
       const paths = [row.schemePath, row.paperPath].filter((path): path is string => Boolean(path));
-      if (paths.length) await supabase.storage.from('redpen-assessment-files').remove(paths);
+      if (paths.length) await removeUnreferencedAssessmentFiles(paths);
     }
     setResults(current => current.filter(item => item.id !== id));
     setToast('Grading record deleted.');
