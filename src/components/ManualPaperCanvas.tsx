@@ -90,6 +90,7 @@ export default function ManualPaperCanvas({ file, annotations, onChange }: Props
     setPage(1);
     setPageCount(1);
     if (!file) return;
+    let imageUrl = '';
     (async () => {
       try {
         if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
@@ -100,11 +101,12 @@ export default function ManualPaperCanvas({ file, annotations, onChange }: Props
         } else if (file.type.startsWith('image/')) {
           const image = new Image();
           image.onload = () => { if (!cancelled) { imageRef.current = image; void renderPage(1); } };
-          image.src = URL.createObjectURL(file);
+          imageUrl = URL.createObjectURL(file);
+          image.src = imageUrl;
         }
       } catch (error) { console.error('Could not load paper into marking canvas:', error); }
     })();
-    return () => { cancelled = true; };
+    return () => { cancelled = true; if (imageUrl) URL.revokeObjectURL(imageUrl); };
   }, [file]);
 
   useEffect(() => { if (file && (pdfRef.current || imageRef.current)) void renderPage(page); }, [file, page, zoom, pageCount]);
