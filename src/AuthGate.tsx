@@ -66,10 +66,11 @@ export default function AuthGate() {
           event: 'UPDATE', schema: 'public', table: 'workspace_snapshots',
           filter: `user_id=eq.${session.user.id}`,
         }, payload => {
-          const incoming = JSON.stringify(payload.new.data);
-          if (incoming && localStorage.getItem(WORKSPACE_KEY) !== incoming) {
-            localStorage.setItem(WORKSPACE_KEY, incoming);
-            window.dispatchEvent(new CustomEvent('redpen-cloud-workspace', { detail: payload.new.data }));
+          const incomingData = payload.new.data as { sync_token?: string; workbooks?: unknown[]; results?: unknown[] };
+          const currentData = JSON.parse(localStorage.getItem(WORKSPACE_KEY) || 'null') as { sync_token?: string } | null;
+          if (incomingData && incomingData.sync_token !== currentData?.sync_token) {
+            localStorage.setItem(WORKSPACE_KEY, JSON.stringify(incomingData));
+            window.dispatchEvent(new CustomEvent('redpen-cloud-workspace', { detail: incomingData }));
           }
         })
         .subscribe();
