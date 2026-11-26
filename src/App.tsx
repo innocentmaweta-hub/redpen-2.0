@@ -144,6 +144,28 @@ function App({ user }: { user: User }) {
   const navigate = (next: Screen) => { setScreen(next); setMobileNav(false); };
   const startGrading = () => { setStudent({ name: '', id: '', className: '' }); setScheme(null); setPaper(null); setPaperUrl(''); setQuestions([{ id: uid(), label: 'Question 1', max: 10, score: 0, feedback: '' }]); setOverallFeedback(''); setMode('manual'); setAiGradingMeta(null); navigate('grade'); };
   const onPaper = (file?: File) => { if (!file) return; if (file.size > 25 * 1024 * 1024) { setToast('Please choose a file smaller than 25 MB.'); return; } setPaper(file); if (paperUrl) URL.revokeObjectURL(paperUrl); setPaperUrl(URL.createObjectURL(file)); };
+  const runAiGrading = async (schemeFile = scheme, paperFile = paper) => {
+    if (!schemeFile || !paperFile) { setToast('Upload both a marking scheme and a student answer paper first.'); return null; }
+    if (!activeCourse) { setToast('Create or select a course before grading.'); return null; }
+    setAiBusy(true);
+    try {
+      const [schemeDoc, paperDoc] = await Promise.all([extractDocument(schemeFile), extractDocument(paperFile)]);
+      const { data, error } = await supabase.functions.invoke('ai-grade', { body: { schemeText: schemeDoc.text, schemeImages: schemeDoc.images, paperText: paperDoc.text, paperImages: paperDoc.images } });
+      if (error) throw new Error(data?.error || error.message);
+      if (data?.error) throw new Error(data.error);
+      if (!Array.isArray(data?.questions) || !data.questions.length) throw new Error('The AI did not return question-level marks.');
+      const marks: Question[] = data.questions.map((q: any, i: number) => ({ id: q.id || uid(), label: String(q.label || ('Question ' + (i + 1))), max: Number(q.max), score: Number(q.score), feedback: String(q.feedback || '') }));
+      if (marks.some(q => !Number.isFinite(q.max) || q.max <= 0 || !Number.isFinite(q.score) || q.score < 0 || q.score > q.max)) throw new Error('The AI returned marks outside the valid ranges. No marks were applied.');
+      setStudent(current => ({ name: data.student?.name || current.name || paperFile.name.replace(/\\.[^.]+$/, ''), id: data.student?.id || current.id, className: data.student?.className || current.className }));
+      setQuestions(marks);
+      setOverallFeedback(String(data.overallFeedback || ''));
+      setAiGradingMeta({ provider: data.provider || 'AI provider', model: data.model || 'configured model', usage: data.usage || null });
+      setMode('ai');
+      setToast(data.needsReview ? 'AI draft completed. Review the flagged items carefully before saving.' : 'AI marking draft completed. Review every question before saving.');
+      return data;
+    } catch (cause) { setToast(cause instanceof Error ? cause.message : 'AI grading failed. Please try again.'); return null; }
+    finally { setAiBusy(false); }
+  };
   const saveResult = async () => {
     if (!student.name.trim()) { setToast('Enter the student name before saving.'); return; }
     if (!activeCourse) { setToast('Create or select a course first.'); return; }
@@ -198,6 +220,15 @@ function App({ user }: { user: User }) {
         maximum: totalMarks, percentage, grade: gradeFor(percentage), feedback: overallFeedback,
         paperName: paper?.name || '',
       };
+      if (aiGradingMeta) {
+        const { error: aiLogError } = await supabase.from('ai_grading_runs').insert({
+          owner_id: user.id, assessment_id: assessmentId, provider: aiGradingMeta.provider,
+          model: aiGradingMeta.model, status: 'completed',
+          input_summary: { marking_scheme: Boolean(schemePath), answer_paper: Boolean(paperPath) },
+          output_summary: { question_count: questions.length, percentage, review_required: false },
+        });
+        if (aiLogError) console.warn('Could not write AI audit record:', aiLogError.message);
+      }
       setResults(current => [result, ...current]);
       setToast('Grading result saved securely to your RedPen cloud workspace.');
       navigate('results');
@@ -208,8 +239,10 @@ function App({ user }: { user: User }) {
   };
   const addWorkbook = async () => {
     if (!workbookName.trim()) return;
+    const selectedInstitution = institutions.find(item => item.id === activeInstitutionId);
     const { data, error } = await supabase.from('workbooks').insert({
-      owner_id: user.id, name: workbookName.trim(), institution_name: institution.trim() || null,
+      owner_id: user.id, name: workbookName.trim(), institution_id: activeInstitutionId || null,
+      institution_name: selectedInstitution?.name || institution.trim() || null,
     }).select('id,created_at').single();
     if (error) { setToast(`Could not create workbook: ${error.message}`); return; }
     const w: Workbook = { id: data.id, name: workbookName.trim(), institution: institution.trim(), createdAt: data.created_at, courses: [] };
