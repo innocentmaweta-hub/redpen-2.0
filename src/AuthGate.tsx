@@ -17,6 +17,9 @@ export default function AuthGate() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [recoveryMode, setRecoveryMode] = useState(false);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
 
   useEffect(() => {
     let alive = true;
@@ -26,7 +29,8 @@ export default function AuthGate() {
       setSession(data.session);
       setChecking(false);
     });
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+    const { data: listener } = supabase.auth.onAuthStateChange((event, nextSession) => {
+      if (event === 'PASSWORD_RECOVERY') setRecoveryMode(true);
       setSession(nextSession);
       setError('');
       setNotice('');
@@ -107,6 +111,23 @@ export default function AuthGate() {
     }
   };
 
+  const updatePassword = async (event: FormEvent) => {
+    event.preventDefault();
+    if (newPassword.length < 8) { setError('Use at least 8 characters for your new password.'); return; }
+    if (newPassword !== confirmPassword) { setError('The passwords do not match.'); return; }
+    setBusy(true);
+    setError('');
+    const { error: updateError } = await supabase.auth.updateUser({ password: newPassword });
+    if (updateError) setError(updateError.message);
+    else {
+      setRecoveryMode(false);
+      setNewPassword('');
+      setConfirmPassword('');
+      setNotice('Your password has been updated.');
+    }
+    setBusy(false);
+  };
+
   const resetPassword = async () => {
     if (!email.trim()) {
       setError('Enter your email address first.');
@@ -126,6 +147,23 @@ export default function AuthGate() {
   if (checking || (session && !workspaceReady)) {
     return <div className="auth-loading"><div className="auth-spinner" /><span>Preparing your secure RedPen workspace…</span></div>;
   }
+
+  if (session && recoveryMode) return (
+    <main className="auth-page">
+      <section className="auth-card">
+        <div className="auth-logo"><img src="/favicon.png" alt="" /><span>RedPen</span></div>
+        <span className="auth-eyebrow">ACCOUNT SECURITY</span>
+        <h1>Choose a new password.</h1>
+        <p className="auth-intro">Set a new password for your RedPen account.</p>
+        <form onSubmit={updatePassword} className="auth-form">
+          <label>New password<input type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)} minLength={8} required autoComplete="new-password" /></label>
+          <label>Confirm new password<input type="password" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} minLength={8} required autoComplete="new-password" /></label>
+          {error && <div className="auth-error" role="alert">{error}</div>}
+          <button className="auth-submit" disabled={busy}>{busy ? 'Updating…' : 'Update password'}</button>
+        </form>
+      </section>
+    </main>
+  );
 
   if (session) return <App user={session.user} />;
 
