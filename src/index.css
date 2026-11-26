@@ -26,3 +26,10 @@
   .results-filter-footer .report-actions button { justify-content: center; }
   .results-filter-heading { align-items: flex-start; }
 }
+
+
+.result-row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; white-space: nowrap; }
+.result-row-actions .batch-preview-button { min-height: 30px; padding: 5px 8px; }
+@media (max-width: 760px) {
+  .result-row-actions { flex-wrap: wrap; justify-content: flex-start; }
+}
