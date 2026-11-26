@@ -34,3 +34,16 @@
 .annotation-content .manual-canvas-stage{flex:1;min-height:55vh;max-height:none;overflow:auto;align-items:flex-start}
 .annotation-content .manual-canvas-sheet{margin:0 auto;max-width:none}
 @media(max-width:760px){.annotation-content .manual-canvas-toolbar{position:relative;flex-direction:column;gap:10px}.annotation-content .canvas-toolbar-section{border-right:0;border-bottom:1px solid #3a4657;padding:0 0 9px;width:100%}.annotation-content .canvas-toolbar-section:last-child{border-bottom:0;padding-bottom:0}.annotation-content .canvas-toolbar-label{margin-bottom:2px}.annotation-content .manual-canvas-stage{min-height:52vh}}
+
+
+/* Score annotations in the expanded paper marking canvas. */
+.annotation-content .canvas-marks-panel{display:flex;align-items:center;gap:12px;min-width:220px}
+.annotation-content .canvas-maximum-field{display:flex;align-items:center;gap:7px;color:#e1e7ef;font-size:10px;white-space:nowrap}
+.annotation-content .canvas-maximum-field input{width:86px;min-height:32px;padding:5px 8px;border:1px solid #68778d;border-radius:7px;background:#101722;color:#fff;font:inherit;font-size:12px}
+.annotation-content .canvas-awarded-total{display:flex;align-items:center;gap:5px;color:#b8c4d3;font-size:10px;white-space:nowrap}
+.annotation-content .canvas-awarded-total b{color:#71d6a4;font-size:15px}
+.annotation-content .manual-canvas-sheet{position:relative}
+.annotation-content .paper-score-annotation{position:absolute;z-index:5;transform:translate(-50%,-50%);min-width:27px;min-height:27px;padding:3px 7px;border:2px solid #fff;border-radius:7px;background:#d93434;color:#fff;font-size:15px;font-weight:800;line-height:1.1;box-shadow:0 2px 7px #0009;cursor:pointer;touch-action:manipulation}
+.annotation-content .paper-score-annotation:hover{background:#a91f1f;transform:translate(-50%,-50%) scale(1.08)}
+.annotation-content .canvas-marking-hint{margin:0;color:#e8b65e;font-size:11px}
+@media(max-width:760px){.annotation-content .canvas-marks-panel{align-items:flex-start;flex-direction:column;gap:7px}.annotation-content .canvas-maximum-field{width:100%;justify-content:space-between}.annotation-content .canvas-maximum-field input{width:110px}.annotation-content .paper-score-annotation{min-width:25px;min-height:25px;font-size:13px}}
