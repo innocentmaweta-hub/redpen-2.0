@@ -95,7 +95,8 @@ create table public.batch_job_files (
   batch_job_id uuid not null references public.batch_jobs(id) on delete cascade,
   storage_path text not null,
   original_filename text not null,
-  status text not null default 'queued' check (status in ('queued','processing','completed','needs_review','failed')),
+  file_size_bytes bigint not null default 0,
+  status not null default 'queued' check (status in ('queued','processing','completed','needs_review','failed')),
   detected_student_name text,
   error_message text,
   created_at timestamptz not null default now()
