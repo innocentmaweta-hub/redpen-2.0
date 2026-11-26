@@ -2,7 +2,7 @@ import ExcelJS from 'exceljs';
 import { jsPDF } from 'jspdf';
 
 export type ExportRow = {
-  student: string; studentId: string; course: string; workbook: string;
+  student: string; studentId: string; course: string; institution: string; workbook: string;
   date: string; score: number; maximum: number; percentage: number;
   grade: string; feedback: string;
 };
@@ -20,6 +20,7 @@ export async function exportResultsExcel(rows: ExportRow[]) {
     { header: 'Student', key: 'student', width: 28 },
     { header: 'Student ID', key: 'studentId', width: 20 },
     { header: 'Course', key: 'course', width: 24 },
+    { header: 'Institution', key: 'institution', width: 30 },
     { header: 'Workbook', key: 'workbook', width: 28 },
     { header: 'Date', key: 'date', width: 16 },
     { header: 'Score', key: 'score', width: 12 },
@@ -33,7 +34,7 @@ export async function exportResultsExcel(rows: ExportRow[]) {
   sheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF202B3A' } };
   sheet.getColumn('percentage').numFmt = '0.0%';
   sheet.views = [{ state: 'frozen', ySplit: 1 }];
-  sheet.autoFilter = { from: 'A1', to: 'J1' };
+  sheet.autoFilter = { from: 'A1', to: 'K1' };
   const buffer = await workbook.xlsx.writeBuffer();
   downloadBlob(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `redpen-results-${dateStamp()}.xlsx`);
 }
@@ -45,11 +46,13 @@ export function exportResultsPdf(rows: ExportRow[]) {
   const columns = [
     { title: 'Student', x: margin, width: 43 },
     { title: 'ID', x: 57, width: 28 },
-    { title: 'Course', x: 87, width: 42 },
-    { title: 'Date', x: 131, width: 22 },
-    { title: 'Score', x: 155, width: 20 },
-    { title: '%', x: 177, width: 16 },
-    { title: 'Grade', x: 195, width: 17 },
+    { title: 'Course', x: 87, width: 30 },
+    { title: 'Institution', x: 119, width: 35 },
+    { title: 'Workbook', x: 156, width: 32 },
+    { title: 'Date', x: 190, width: 18 },
+    { title: 'Score', x: 210, width: 18 },
+    { title: '%', x: 230, width: 12 },
+    { title: 'Grade', x: 244, width: 18 },
   ];
   let y = 17;
   doc.setFont('helvetica', 'bold');
@@ -74,7 +77,7 @@ export function exportResultsPdf(rows: ExportRow[]) {
   drawHeader();
   rows.forEach((row, index) => {
     if (y > 190) { doc.addPage(); y = 17; drawHeader(); }
-    const values = [row.student, row.studentId || '—', row.course, row.date, `${row.score}/${row.maximum}`, `${row.percentage.toFixed(1)}%`, row.grade];
+    const values = [row.student, row.studentId || '—', row.course, row.institution || '—', row.workbook || '—', row.date, `${row.score}/${row.maximum}`, `${row.percentage.toFixed(1)}%`, row.grade];
     values.forEach((value, i) => doc.text(doc.splitTextToSize(String(value), columns[i].width)[0] || '', columns[i].x, y));
     if (index % 2 === 1) {
       doc.setDrawColor(225, 229, 234);
