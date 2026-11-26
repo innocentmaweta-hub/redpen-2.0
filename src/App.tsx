@@ -584,10 +584,11 @@ function App({ user }: { user: User }) {
             if (fileUpdateError) throw fileUpdateError;
             const result: Result = {
               id: assessmentId, assessmentId, courseId: job.course_id || activeCourse.id, workbookId: job.workbook_id || activeWorkbook?.id,
-              institutionName: activeWorkbook?.institution || '', schemePath: job.marking_scheme_path, paperPath: file.storagePath,
+              institutionName: workbooks.find(w => w.id === job.workbook_id)?.institution || activeWorkbook?.institution || '', schemePath: job.marking_scheme_path, paperPath: file.storagePath,
               student: { name: studentName, id: studentData.id || '', className: studentData.className || '' },
-              courseName: activeCourse.name, workbookName: activeWorkbook?.name || '', date: new Date().toISOString(),
-              questions, total, maximum, percentage: percent, grade: gradeFor(percent),
+              courseName: workbooks.find(w => w.id === job.workbook_id)?.courses.find(course => course.id === job.course_id)?.name || activeCourse.name,
+              workbookName: workbooks.find(w => w.id === job.workbook_id)?.name || activeWorkbook?.name || '',
+              date: new Date().toISOString(), questions, total, maximum, percentage: percent, grade: gradeFor(percent),
               feedback: graded.overallFeedback || '', paperName: file.name,
             };
             setResults(current => [result, ...current]);
