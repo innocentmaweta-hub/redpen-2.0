@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { User } from '@supabase/supabase-js';
 import { supabase } from './lib/supabase';
 import {
@@ -29,6 +29,7 @@ function readStore(): { workbooks: Workbook[]; results: Result[] } {
 function formatDate(value: string) { return new Date(value).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }); }
 function App({ user }: { user: User }) {
   const initial = readStore();
+  const skipNextCloudSave = useRef(false);
   const [workbooks, setWorkbooks] = useState<Workbook[]>(initial.workbooks);
   const [results, setResults] = useState<Result[]>(initial.results);
   const [activeWorkbookId, setActiveWorkbookId] = useState(initial.workbooks[0]?.id || '');
@@ -55,6 +56,7 @@ function App({ user }: { user: User }) {
   const [mobileNav, setMobileNav] = useState(false);
 
   useEffect(() => {
+    if (skipNextCloudSave.current) { skipNextCloudSave.current = false; return; }
     const snapshot = { workbooks, results, sync_token: uid() };
     localStorage.setItem(STORE, JSON.stringify(snapshot));
     const timer = window.setTimeout(async () => {
@@ -71,6 +73,7 @@ function App({ user }: { user: User }) {
     const receiveCloudWorkspace = (event: Event) => {
       const snapshot = (event as CustomEvent).detail;
       if (snapshot && Array.isArray(snapshot.workbooks) && Array.isArray(snapshot.results)) {
+        skipNextCloudSave.current = true;
         setWorkbooks(snapshot.workbooks);
         setResults(snapshot.results);
       }
