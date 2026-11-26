@@ -384,7 +384,7 @@ function App({ user }: { user: User }) {
             const paperFile = new File([paperBlob], file.name, { type: paperBlob.type || (file.name.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'image/jpeg') });
             const paperDoc = await extractDocument(paperFile);
             const { data: graded, error: gradeError } = await supabase.functions.invoke('ai-grade', {
-              body: { schemeText: schemeDoc.text, schemeImages: schemeDoc.images, paperText: paperDoc.text, paperImages: paperDoc.images },
+              body: { schemeText: schemeDoc.text, schemeImages: schemeDoc.images, paperText: paperDoc.text, paperImages: paperDoc.images, sourceWarnings: [...schemeDoc.warnings, ...paperDoc.warnings] },
             });
             if (gradeError || graded?.error) throw new Error(graded?.error || gradeError?.message || 'AI grading failed.');
             const questions: Question[] = (graded.questions || []).map((q: any, i: number) => ({
