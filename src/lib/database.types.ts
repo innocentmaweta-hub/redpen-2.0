@@ -84,6 +84,7 @@ export type Database = {
           created_at: string
           detected_student_name: string | null
           error_message: string | null
+          file_size_bytes: number
           id: string
           original_filename: string
           owner_id: string
@@ -95,6 +96,7 @@ export type Database = {
           created_at?: string
           detected_student_name?: string | null
           error_message?: string | null
+          file_size_bytes?: number
           id?: string
           original_filename: string
           owner_id: string
@@ -106,6 +108,7 @@ export type Database = {
           created_at?: string
           detected_student_name?: string | null
           error_message?: string | null
+          file_size_bytes?: number
           id?: string
           original_filename?: string
           owner_id?: string
