@@ -322,7 +322,7 @@ function App({ user }: { user: User }) {
         if (schemeDownloadError || !schemeBlob) { needsReview++; continue; }
         const schemeFile = new File([schemeBlob], job.marking_scheme_path.split('/').pop() || 'marking-scheme.pdf', { type: schemeBlob.type || 'application/pdf' });
         const schemeDoc = await extractDocument(schemeFile);
-        const pending = batchFiles.filter(file => file.batchJobId === jobId && file.status !== 'Completed' && file.status !== 'Processing');
+        const pending = batchFiles.filter(file => file.batchJobId === jobId && (file.status === 'Ready' || file.status === 'Failed'));
         await supabase.from('batch_jobs').update({ status: 'processing' }).eq('id', jobId);
         let jobCompleted = 0;
         for (const file of pending) {
@@ -395,8 +395,8 @@ function App({ user }: { user: User }) {
             jobCompleted++;
           } catch (cause) {
             const message = cause instanceof Error ? cause.message : 'Processing failed.';
-            await supabase.from('batch_job_files').update({ status: 'needs_review', error_message: message }).eq('id', file.id);
-            setBatchFiles(current => current.map(item => item.id === file.id ? { ...item, status: 'Needs review' } : item));
+            await supabase.from('batch_job_files').update({ status: 'failed', error_message: message }).eq('id', file.id);
+            setBatchFiles(current => current.map(item => item.id === file.id ? { ...item, status: 'Failed' } : item));
             needsReview++;
           }
           await supabase.from('batch_jobs').update({ completed_files: jobCompleted }).eq('id', jobId);
