@@ -52,7 +52,7 @@
 /* Compact Results controls share the heading row; the academic crown stays at the far right. */
 .results-page-heading{display:flex;align-items:center;gap:18px;width:100%}
 .results-heading-copy{flex:0 0 auto;min-width:175px}
-.results-heading-copy h1{font:800 27px Manrope,sans-serif;letter-spacing:-1px;margin:7px 0 5px;color:#f2f4f7}
+.results-heading-copy h1{font:800 27px 'Nunito Sans',sans-serif;letter-spacing:-1px;margin:7px 0 5px;color:#f2f4f7}
 .results-heading-copy p{font-size:11px;color:#929dad;margin:0}
 .results-heading-controls{display:flex;align-items:flex-end;justify-content:flex-end;gap:9px;flex:1;min-width:0}
 .results-inline-filter{display:grid;gap:5px;min-width:125px;flex:1;max-width:190px}
