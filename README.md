@@ -1,57 +1,71 @@
 # RedPen 2.0
 
-A clean React + TypeScript application for organising examination marking and student assessment. The original application is retained only as a visual reference; this branch is a fresh implementation.
+A clean React + TypeScript examination marking workspace. The legacy application is retained only as a reference in `archive/original-full-copy`; the new application is rebuilt independently.
 
-## Supabase project
+## Production services
 
-- Project: `RedPen 2.0`
+- Supabase project: `RedPen 2.0`
 - Project ref: `kckljigwklpezqvaorao`
 - Region: `eu-west-1` (Ireland)
 - API URL: `https://kckljigwklpezqvaorao.supabase.co`
+- Hosting: Vercel, connected to the GitHub `main` branch.
 
-The browser client uses the Supabase publishable key. It is safe for browser use because database and storage access is restricted by Row Level Security. Never put a service-role or secret key in frontend code.
+## Supabase features
 
-## Connected services
+- **Auth:** email/password sign-up, sign-in and password recovery.
+- **Postgres:** profiles, institutions, teacher memberships, workbooks, courses, students, assessments, results, batch jobs and AI audit records.
+- **Storage:** private assessment and report buckets. File access is restricted by ownership and institution membership.
+- **Realtime:** workspace snapshots, grading results and batch progress.
+- **RLS:** ownership and institution-membership policies protect records.
+- **Edge Functions:** `ai-grade` and `institution-admin`, both requiring authenticated users.
 
-- **Supabase Auth:** email/password sign-up, sign-in, session persistence and password reset.
-- **Postgres:** profiles, institutions and memberships, workbooks, courses, students, assessments, grading results, batch jobs, user preferences and workspace snapshots.
-- **Storage:** private buckets for assessment uploads and generated reports. Files are stored under the authenticated user's ID.
-- **Row Level Security:** ownership policies protect workspace rows and uploaded files.
-- **Realtime:** grading results and batch progress tables are enabled for Realtime subscriptions.
-- **Database triggers:** new Auth users receive a profile, workspace snapshot and preferences record.
+## AI grading setup
 
-## Current app behaviour
+The `ai-grade` Supabase Edge Function is deployed. It reads text from PDFs and text files, and sends image/scanned-page content to a vision-capable model. It returns question-level marks, evidence-based feedback, student details when legible, and manual-review flags. RedPen validates the marks and requires the teacher to review the draft before saving.
 
-- Workbooks and courses are saved to Supabase Postgres.
-- Manual grading results are saved to structured assessment and grading tables.
-- Marking schemes and answer papers are uploaded to private Supabase Storage.
-- Batch paper files are stored privately and tracked in batch job tables.
-- A per-user workspace snapshot keeps the current interface state synchronised across devices.
-- The interface continues to identify AI grading as not connected. No automatic marks are generated.
-- Payment processing is not included.
+Configure these server-side secrets in **Supabase Dashboard → Edge Functions → Secrets**:
 
-## Environment
+| Secret | Value |
+|---|---|
+| `AI_API_KEY` | Your AI provider API key |
+| `AI_PROVIDER` | `openrouter` (default) or `openai` |
+| `AI_MODEL` | Provider model ID, e.g. `openai/gpt-4.1-mini` |
+| `AI_BASE_URL` | Optional; defaults to `https://openrouter.ai/api/v1` |
 
-The project has safe public defaults for the RedPen Supabase URL and publishable key. For deployment, set these Vite variables if you want to manage configuration outside the source:
+Never place AI keys in Vite environment variables, browser code, or GitHub. The AI key is only read by the Supabase Edge Function. The configured model must support image input for scanned documents.
+
+## Institution collaboration
+
+An institution owner can create an institution and add teachers who already have RedPen accounts by email. Workbooks attached to an institution, courses, assessment results and associated private source files are readable by institution members under RLS. Membership administration is handled by the authenticated `institution-admin` Edge Function.
+
+## Reports and batch processing
+
+- Export filtered assessment results to Excel (`.xlsx`) or PDF.
+- Upload a marking scheme and multiple answer papers to a batch.
+- Batch papers are processed sequentially, with each result and progress state saved to Supabase.
+- Papers with unreadable content, uncertain marks or provider errors are flagged for review or retry.
+
+## Frontend environment
+
+The browser uses the Supabase publishable key. Safe public defaults are present in `src/lib/supabase.ts`; optional Vite variables are:
 
 ```env
 VITE_SUPABASE_URL=https://kckljigwklpezqvaorao.supabase.co
 VITE_SUPABASE_PUBLISHABLE_KEY=your_supabase_publishable_key
 ```
 
-See `.env.example` for the template. Never add a Supabase service-role or secret key to Vite variables.\n\nBefore production sign-up and password recovery, add the deployed RedPen domain to **Supabase Dashboard → Authentication → URL Configuration** as the Site URL and an allowed Redirect URL. The app returns confirmation and password-reset links to the active site origin.
+Never add a Supabase service-role/secret key or AI provider key to Vite variables.
+
+## Authentication redirect setup
+
+In **Supabase Dashboard → Authentication → URL Configuration**, set the production website as the Site URL and add it to the allowed Redirect URLs. The app sends sign-up confirmation and password-recovery links to the current site origin.
 
 ## Development
 
 ```bash
 npm install
 npm run dev
-```
-
-## Build
-
-```bash
 npm run build
 ```
 
-Database migration: `supabase/migrations/20261126122605_redpen_core_workspace_auth_storage.sql`.
+Database migrations are in `supabase/migrations/`. Deployable Edge Function source is in `supabase/functions/`.
