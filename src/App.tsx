@@ -436,7 +436,7 @@ function App({ user }: { user: User }) {
     setToast('Grading record deleted.');
   };
 
-  const nav = [{ id:'dashboard' as Screen, label:'Dashboard', icon:LayoutDashboard }, { id:'grade' as Screen, label:'Grade', icon:ClipboardList }, { id:'results' as Screen, label:'Results', icon:FileText }, { id:'history' as Screen, label:'History', icon:Clock3 }, { id:'batch' as Screen, label:'Batch grading', icon:LayersIcon }, { id:'settings' as Screen, label:'Settings', icon:Settings }];
+  const nav = [{ id:'dashboard' as Screen, label:'Dashboard', icon:LayoutDashboard }, { id:'grade' as Screen, label:'Grade', icon:ClipboardList }, { id:'results' as Screen, label:'Results', icon:FileText }, { id:'history' as Screen, label:'History', icon:Clock3 }, { id:'batch' as Screen, label:'Batch grading', icon:LayersIcon }, { id:'institutions' as Screen, label:'Institutions', icon:Users }, { id:'settings' as Screen, label:'Settings', icon:Settings }];
   const title = nav.find(n => n.id === screen)?.label || 'Dashboard';
 
   return <div className="app-shell">
