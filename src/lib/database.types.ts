@@ -14,6 +14,63 @@ export type Database = {
   }
   public: {
     Tables: {
+      ai_grading_runs: {
+        Row: {
+          assessment_id: string | null
+          batch_job_id: string | null
+          created_at: string
+          error_message: string | null
+          id: string
+          input_summary: Json
+          model: string
+          output_summary: Json
+          owner_id: string
+          provider: string
+          status: string
+        }
+        Insert: {
+          assessment_id?: string | null
+          batch_job_id?: string | null
+          created_at?: string
+          error_message?: string | null
+          id?: string
+          input_summary?: Json
+          model: string
+          output_summary?: Json
+          owner_id: string
+          provider: string
+          status: string
+        }
+        Update: {
+          assessment_id?: string | null
+          batch_job_id?: string | null
+          created_at?: string
+          error_message?: string | null
+          id?: string
+          input_summary?: Json
+          model?: string
+          output_summary?: Json
+          owner_id?: string
+          provider?: string
+          status?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ai_grading_runs_assessment_id_fkey"
+            columns: ["assessment_id"]
+            isOneToOne: false
+            referencedRelation: "assessments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ai_grading_runs_batch_job_id_fkey"
+            columns: ["batch_job_id"]
+            isOneToOne: false
+            referencedRelation: "batch_jobs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       assessments: {
         Row: {
           answer_paper_path: string | null
@@ -131,6 +188,7 @@ export type Database = {
           course_id: string | null
           created_at: string
           id: string
+          marking_scheme_path: string | null
           owner_id: string
           status: string
           total_files: number
@@ -142,6 +200,7 @@ export type Database = {
           course_id?: string | null
           created_at?: string
           id?: string
+          marking_scheme_path?: string | null
           owner_id: string
           status?: string
           total_files?: number
@@ -153,6 +212,7 @@ export type Database = {
           course_id?: string | null
           created_at?: string
           id?: string
+          marking_scheme_path?: string | null
           owner_id?: string
           status?: string
           total_files?: number
