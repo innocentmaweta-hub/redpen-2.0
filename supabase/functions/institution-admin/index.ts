@@ -2,7 +2,7 @@ import { createClient } from "npm:@supabase/supabase-js@2.57.0";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-redpen-member-email, x-redpen-member-role, x-redpen-membership-id",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 function reply(body: unknown, status = 200) {
