@@ -11,6 +11,7 @@ import {
 import logo from './assets/logo.png';
 import { extractDocument } from './lib/documentReader';
 import { exportResultsExcel, exportResultsPdf } from './lib/reportExports';
+import ManualPaperCanvas from './components/ManualPaperCanvas';
 import './features.css';
 
 type Screen = 'dashboard' | 'grade' | 'results' | 'history' | 'batch' | 'institutions' | 'settings';
@@ -18,7 +19,7 @@ type Question = { id: string; label: string; max: number; score: number; feedbac
 type Course = { id: string; code: string; name: string; year: string; term: string; schemeName?: string };
 type Workbook = { id: string; name: string; institution: string; createdAt: string; courses: Course[] };
 type Student = { name: string; id: string; className: string };
-type Result = { id: string; assessmentId?: string; schemePath?: string; paperPath?: string; courseId?: string; workbookId?: string; institutionName?: string; student: Student; courseName: string; workbookName: string; date: string; questions: Question[]; total: number; maximum: number; percentage: number; grade: string; feedback: string; paperName: string; };
+type Result = { id: string; assessmentId?: string; schemePath?: string; paperPath?: string; paperAnnotations?: Record<string, string>; courseId?: string; workbookId?: string; institutionName?: string; student: Student; courseName: string; workbookName: string; date: string; questions: Question[]; total: number; maximum: number; percentage: number; grade: string; feedback: string; paperName: string; };
 type BatchFile = { id: string; name: string; size: number; status: 'Ready' | 'Processing' | 'Completed' | 'Needs review' | 'Failed'; storagePath?: string; batchJobId?: string };
 type BatchPreview = { name: string; url: string; mimeType: string };
 const STORE = 'redpen-2.0-workspace-v1';
@@ -45,6 +46,7 @@ function App({ user }: { user: User }) {
   const [noScheme, setNoScheme] = useState(false);
   const [paper, setPaper] = useState<File | null>(null);
   const [paperUrl, setPaperUrl] = useState('');
+  const [paperAnnotations, setPaperAnnotations] = useState<Record<string, string>>({});
   const [questions, setQuestions] = useState<Question[]>([{ id: uid(), label: 'Question 1', max: 10, score: 0, feedback: '' }]);
   const [overallFeedback, setOverallFeedback] = useState('');
   const [search, setSearch] = useState('');
@@ -54,7 +56,8 @@ function App({ user }: { user: User }) {
   const [batchFiles, setBatchFiles] = useState<BatchFile[]>([]);
   const [yazaOpen, setYazaOpen] = useState(false);
   const [yazaInput, setYazaInput] = useState('');
-  const [yazaMessages, setYazaMessages] = useState<{role:'assistant'|'user'; text:string}[]>([{ role:'assistant', text:'Hello! I can guide you around RedPen and explain the grading workflow. AI grading connections can be configured separately.' }]);
+  const [yazaMessages, setYazaMessages] = useState<{role:'assistant'|'user'; text:string}[]>([{ role:'assistant', text:'Hello! I am Yaza AI. I can help you navigate RedPen, prepare assessments, edit marks and feedback, and carry out actions you request.' }]);
+  const [yazaBusy, setYazaBusy] = useState(false);
   const [modal, setModal] = useState<'workbook'|'course'|null>(null);
   const [workbookName, setWorkbookName] = useState('');
   const [institution, setInstitution] = useState('');
@@ -109,7 +112,7 @@ function App({ user }: { user: User }) {
     const loadPersistentRecords = async () => {
       const [workbookResponse, assessmentResponse] = await Promise.all([
         supabase.from('workbooks').select('id,name,institution_name,created_at,courses(id,code,name,academic_year,term)').order('created_at', { ascending: false }),
-        supabase.from('assessments').select('id,assessed_at,paper_filename,marking_scheme_path,answer_paper_path,students(full_name,student_number,class_name),courses(name),workbooks(name,institution_name),grading_results(score,maximum_score,percentage,grade,feedback,question_scores)').order('assessed_at', { ascending: false }).limit(1000),
+        supabase.from('assessments').select('id,assessed_at,paper_filename,marking_scheme_path,answer_paper_path,students(full_name,student_number,class_name),courses(name),workbooks(name,institution_name),grading_results(score,maximum_score,percentage,grade,feedback,question_scores,paper_annotations)').order('assessed_at', { ascending: false }).limit(1000),
       ]);
       if (!alive) return;
       if (workbookResponse.error) console.error('Could not load shared workbooks:', workbookResponse.error.message);
@@ -144,7 +147,7 @@ function App({ user }: { user: User }) {
             courseId: row.course_id || undefined, workbookId: row.workbook_id || undefined,
             institutionName: workbookRow?.institution_name || '',
             courseName: courseRow?.name || 'Course', workbookName: workbookRow?.name || '',
-            date: row.assessed_at, questions: questionRows, total: Number(grade.score || 0),
+            date: row.assessed_at, questions: questionRows, paperAnnotations: grade.paper_annotations || {}, total: Number(grade.score || 0),
             maximum: Number(grade.maximum_score || 0), percentage: Number(grade.percentage || 0),
             grade: grade.grade || '—', feedback: grade.feedback || '', paperName: row.paper_filename || '',
           } as Result];
@@ -211,7 +214,7 @@ function App({ user }: { user: User }) {
     [r.student.name, r.student.id, r.courseName, r.institutionName, r.workbookName, r.grade].join(' ').toLowerCase().includes(search.toLowerCase())
   ), [results, search, resultCourseFilter, resultInstitutionFilter, resultWorkbookFilter]);
   const navigate = (next: Screen) => { setScreen(next); setMobileNav(false); };
-  const startGrading = () => { setReviewContext(null); setStudent({ name: '', id: '', className: '' }); setScheme(null); setNoScheme(false); setPaper(null); setPaperUrl(''); setQuestions([{ id: uid(), label: 'Question 1', max: 10, score: 0, feedback: '' }]); setOverallFeedback(''); setMode('manual'); setAiGradingMeta(null); navigate('grade'); };
+  const startGrading = () => { setReviewContext(null); setStudent({ name: '', id: '', className: '' }); setScheme(null); setNoScheme(false); setPaper(null); setPaperUrl(''); setQuestions([{ id: uid(), label: 'Question 1', max: 10, score: 0, feedback: '' }]); setPaperAnnotations({}); setOverallFeedback(''); setMode('manual'); setAiGradingMeta(null); navigate('grade'); };
   const onPaper = (file?: File) => { if (!file) return; if (file.size > 25 * 1024 * 1024) { setToast('Please choose a file smaller than 25 MB.'); return; } setPaper(file); if (paperUrl) URL.revokeObjectURL(paperUrl); setPaperUrl(URL.createObjectURL(file)); };
   const runAiGrading = async (schemeFile = (noScheme ? null : scheme), paperFile = paper) => {
     if ((!schemeFile && !noScheme) || !paperFile) { setToast('Choose a marking scheme or select No marking scheme, then upload the student paper.'); return null; }
