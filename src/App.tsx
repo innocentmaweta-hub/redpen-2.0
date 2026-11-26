@@ -215,7 +215,7 @@ function App({ user }: { user: User }) {
   ), [results, search, resultCourseFilter, resultInstitutionFilter, resultWorkbookFilter]);
   const navigate = (next: Screen) => { setScreen(next); setMobileNav(false); };
   const startGrading = () => { setReviewContext(null); setStudent({ name: '', id: '', className: '' }); setScheme(null); setNoScheme(false); setPaper(null); setPaperUrl(''); setQuestions([{ id: uid(), label: 'Question 1', max: 10, score: 0, feedback: '' }]); setPaperAnnotations({}); setOverallFeedback(''); setMode('manual'); setAiGradingMeta(null); navigate('grade'); };
-  const onPaper = (file?: File) => { if (!file) return; if (file.size > 25 * 1024 * 1024) { setToast('Please choose a file smaller than 25 MB.'); return; } setPaper(file); if (paperUrl) URL.revokeObjectURL(paperUrl); setPaperUrl(URL.createObjectURL(file)); };
+  const onPaper = (file?: File) => { if (!file) return; if (file.size > 25 * 1024 * 1024) { setToast('Please choose a file smaller than 25 MB.'); return; } setPaper(file); setPaperAnnotations({}); if (paperUrl) URL.revokeObjectURL(paperUrl); setPaperUrl(URL.createObjectURL(file)); };
   const runAiGrading = async (schemeFile = (noScheme ? null : scheme), paperFile = paper) => {
     if ((!schemeFile && !noScheme) || !paperFile) { setToast('Choose a marking scheme or select No marking scheme, then upload the student paper.'); return null; }
     if (!activeCourse) { setToast('Create or select a course before grading.'); return null; }
