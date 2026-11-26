@@ -3,7 +3,7 @@
 A clean React + TypeScript examination marking workspace. The legacy application is retained only as a reference in `archive/original-full-copy`; the new application is rebuilt independently.
 
 ## Production services
- 
+  
 - Supabase project: `RedPen 2.0` 
 - Project ref: `kckljigwklpezqvaorao` 
 - Region: `eu-west-1` (Ireland)
