@@ -55,7 +55,7 @@ function App({ user }: { user: User }) {
   const [mobileNav, setMobileNav] = useState(false);
 
   useEffect(() => {
-    const snapshot = { workbooks, results };
+    const snapshot = { workbooks, results, sync_token: uid() };
     localStorage.setItem(STORE, JSON.stringify(snapshot));
     const timer = window.setTimeout(async () => {
       const { error } = await supabase.from('workspace_snapshots').upsert(
