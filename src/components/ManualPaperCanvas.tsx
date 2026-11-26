@@ -180,14 +180,32 @@ export default function ManualPaperCanvas({ file, annotations, onChange }: Props
   if (!file) return <div className="manual-canvas-empty">Upload a paper to annotate it while marking.</div>;
   return <section className="manual-canvas">
     <div className="manual-canvas-toolbar">
-      <div className="manual-tools">
-        {(['pen','eraser','tick','cross','text','line','rectangle'] as Tool[]).map(item => <button key={item} className={tool===item?'active':''} onClick={()=>setTool(item)}>{item==='tick'?'✓':item==='cross'?'✕':item==='rectangle'?'Box':item[0].toUpperCase()+item.slice(1)}</button>)}
+      <div className="canvas-toolbar-section">
+        <strong className="canvas-toolbar-label">ANNOTATION TOOLS</strong>
+        <div className="manual-tools">
+          {(['pen','eraser','tick','cross','text','line','rectangle'] as Tool[]).map(item => <button type="button" key={item} title={item==='tick'?'Green tick':item==='cross'?'Red cross':item==='rectangle'?'Draw rectangle':item==='line'?'Draw line':item==='text'?'Add text':item==='pen'?'Freehand pen':'Erase ink'} aria-pressed={tool===item} className={tool===item?'active':''} onClick={()=>setTool(item)}>{item==='tick'?'✓':item==='cross'?'✕':item==='rectangle'?'Rectangle':item==='line'?'Line':item==='text'?'Text':item==='eraser'?'Eraser':'Pen'}</button>)}
+        </div>
       </div>
-      <label className="canvas-color">Ink <input type="color" value={color} onChange={e=>setColor(e.target.value)}/></label>
-      <label className="canvas-size">Size <input type="range" min="1" max="10" value={size} onChange={e=>setSize(Number(e.target.value))}/></label>
-      <button onClick={undo} disabled={!undoStack.length}>Undo</button><button onClick={redo} disabled={!redoStack.length}>Redo</button><button onClick={clear}>Clear</button>
-      <button onClick={()=>setZoom(z=>Math.max(.65,Math.round((z-.15)*100)/100))}>−</button><span>{Math.round(zoom*100)}%</span><button onClick={()=>setZoom(z=>Math.min(1.8,Math.round((z+.15)*100)/100))}>+</button>
-      {pageCount>1 && <><button onClick={()=>setPage(p=>Math.max(1,p-1))} disabled={page===1}>Previous</button><span>{page}/{pageCount}</span><button onClick={()=>setPage(p=>Math.min(pageCount,p+1))} disabled={page===pageCount}>Next</button></>}
+      <div className="canvas-toolbar-section canvas-adjustments">
+        <strong className="canvas-toolbar-label">APPEARANCE</strong>
+        <label className="canvas-color">Ink colour <input aria-label="Ink colour" type="color" value={color} onChange={e=>setColor(e.target.value)}/></label>
+        <label className="canvas-size">Brush size <input aria-label="Brush size" type="range" min="1" max="10" value={size} onChange={e=>setSize(Number(e.target.value))}/></label>
+      </div>
+      <div className="canvas-toolbar-section canvas-history">
+        <strong className="canvas-toolbar-label">EDIT</strong>
+        <button type="button" onClick={undo} disabled={!undoStack.length}>↶ Undo</button>
+        <button type="button" onClick={redo} disabled={!redoStack.length}>↷ Redo</button>
+        <button type="button" onClick={clear}>Clear all</button>
+      </div>
+      <div className="canvas-toolbar-section canvas-navigation">
+        <strong className="canvas-toolbar-label">VIEW</strong>
+        <button type="button" onClick={()=>setZoom(z=>Math.max(.65,Math.round((z-.15)*100)/100))} aria-label="Zoom out">−</button>
+        <span className="canvas-zoom-value">{Math.round(zoom*100)}%</span>
+        <button type="button" onClick={()=>setZoom(z=>Math.min(1.8,Math.round((z+.15)*100)/100))} aria-label="Zoom in">+</button>
+        <span className="canvas-page-value">Page {page} of {pageCount}</span>
+        <button type="button" onClick={()=>setPage(p=>Math.max(1,p-1))} disabled={page===1}>Previous page</button>
+        <button type="button" onClick={()=>setPage(p=>Math.min(pageCount,p+1))} disabled={page===pageCount}>Next page</button>
+      </div>
     </div>
     <div className="manual-canvas-stage">{busy&&<span className="canvas-loading">Rendering paper…</span>}<div className="manual-canvas-sheet"><canvas ref={paperRef}/><canvas ref={inkRef} className="manual-ink-layer" onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={pointerUp}/></div></div>
   </section>;
