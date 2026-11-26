@@ -94,6 +94,55 @@ function App({ user }: { user: User }) {
     window.addEventListener('redpen-cloud-workspace', receiveCloudWorkspace);
     return () => window.removeEventListener('redpen-cloud-workspace', receiveCloudWorkspace);
   }, []);
+  useEffect(() => {
+    let alive = true;
+    const loadPersistentRecords = async () => {
+      const [workbookResponse, assessmentResponse] = await Promise.all([
+        supabase.from('workbooks').select('id,name,institution_name,created_at,courses(id,code,name,academic_year,term)').order('created_at', { ascending: false }),
+        supabase.from('assessments').select('id,assessed_at,paper_filename,marking_scheme_path,answer_paper_path,students(full_name,student_number,class_name),courses(name),workbooks(name),grading_results(score,maximum_score,percentage,grade,feedback,question_scores)').order('assessed_at', { ascending: false }).limit(1000),
+      ]);
+      if (!alive) return;
+      if (workbookResponse.error) console.error('Could not load shared workbooks:', workbookResponse.error.message);
+      else {
+        const rows = workbookResponse.data || [];
+        const mapped: Workbook[] = rows.map((row: any) => ({
+          id: row.id, name: row.name, institution: row.institution_name || '',
+          createdAt: row.created_at,
+          courses: (row.courses || []).map((course: any) => ({
+            id: course.id, code: course.code || '', name: course.name,
+            year: course.academic_year || '', term: course.term || '',
+          })),
+        }));
+        setWorkbooks(mapped);
+        setActiveWorkbookId(current => mapped.some(w => w.id === current) ? current : (mapped[0]?.id || ''));
+        setActiveCourseId(current => mapped.some(w => w.courses.some(c => c.id === current)) ? current : (mapped[0]?.courses[0]?.id || ''));
+      }
+      if (assessmentResponse.error) console.error('Could not load shared assessments:', assessmentResponse.error.message);
+      else {
+        const mappedResults: Result[] = (assessmentResponse.data || []).flatMap((row: any) => {
+          const grade = Array.isArray(row.grading_results) ? row.grading_results[0] : row.grading_results;
+          if (!grade) return [];
+          const studentRow = Array.isArray(row.students) ? row.students[0] : row.students;
+          const courseRow = Array.isArray(row.courses) ? row.courses[0] : row.courses;
+          const workbookRow = Array.isArray(row.workbooks) ? row.workbooks[0] : row.workbooks;
+          const questionRows = Array.isArray(grade.question_scores) ? grade.question_scores : [];
+          return [{
+            id: row.id, assessmentId: row.id,
+            schemePath: row.marking_scheme_path || undefined,
+            paperPath: row.answer_paper_path || undefined,
+            student: { name: studentRow?.full_name || 'Unknown student', id: studentRow?.student_number || '', className: studentRow?.class_name || '' },
+            courseName: courseRow?.name || 'Course', workbookName: workbookRow?.name || '',
+            date: row.assessed_at, questions: questionRows, total: Number(grade.score || 0),
+            maximum: Number(grade.maximum_score || 0), percentage: Number(grade.percentage || 0),
+            grade: grade.grade || '—', feedback: grade.feedback || '', paperName: row.paper_filename || '',
+          } as Result];
+        });
+        setResults(mappedResults);
+      }
+    };
+    void loadPersistentRecords();
+    return () => { alive = false; };
+  }, [user.id]);
   useEffect(() => { if (!toast) return; const timer = window.setTimeout(() => setToast(''), 2800); return () => window.clearTimeout(timer); }, [toast]);
   useEffect(() => {
     let alive = true;
