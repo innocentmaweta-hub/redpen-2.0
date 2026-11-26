@@ -246,14 +246,18 @@ function App({ user }: { user: User }) {
       uploadedPaths.push(path);
       return path;
     };
+    let saveStage = 'Preparing assessment files';
     try {
+      saveStage = 'Uploading student paper / marking scheme';
       const schemePath = await uploadAssessmentFile(noScheme ? null : scheme, 'scheme');
       const paperPath = await uploadAssessmentFile(paper, 'paper');
+      saveStage = 'Creating student record';
       const { data: studentRow, error: studentError } = await supabase.from('students').insert({
         owner_id: user.id, full_name: student.name.trim(),
         student_number: student.id.trim() || null, class_name: student.className.trim() || null,
       }).select('id').single();
-      if (studentError) throw studentError;
+      if (studentError) throw new Error(studentError.message || JSON.stringify(studentError));
+      saveStage = 'Creating assessment record';
       const { error: assessmentError } = await supabase.from('assessments').insert({
         id: assessmentId, owner_id: user.id, workbook_id: activeWorkbook?.id || null,
         course_id: activeCourse.id, student_id: studentRow.id,
@@ -262,8 +266,9 @@ function App({ user }: { user: User }) {
       });
       if (assessmentError) {
         await supabase.from('students').delete().eq('id', studentRow.id);
-        throw assessmentError;
+        throw new Error(assessmentError.message || JSON.stringify(assessmentError));
       }
+      saveStage = 'Saving grading marks';
       const { error: resultError } = await supabase.from('grading_results').insert({
         owner_id: user.id, assessment_id: assessmentId, score: earnedMarks,
         maximum_score: totalMarks, percentage, grade: gradeFor(percentage),
@@ -272,7 +277,7 @@ function App({ user }: { user: User }) {
       if (resultError) {
         await supabase.from('assessments').delete().eq('id', assessmentId);
         await supabase.from('students').delete().eq('id', studentRow.id);
-        throw resultError;
+        throw new Error(resultError.message || JSON.stringify(resultError));
       }
       const result: Result = {
         id: assessmentId, assessmentId, schemePath: schemePath || undefined, paperPath: paperPath || undefined,
@@ -295,7 +300,9 @@ function App({ user }: { user: User }) {
       navigate('results');
     } catch (cause) {
       if (uploadedPaths.length) await supabase.storage.from('redpen-assessment-files').remove(uploadedPaths);
-      setToast(cause instanceof Error ? `Could not save assessment: ${cause.message}` : 'Could not save assessment. Please try again.');
+      const detail = cause instanceof Error ? cause.message : (cause && typeof cause === 'object' && 'message' in cause ? String((cause as any).message) : JSON.stringify(cause));
+      console.error('RedPen assessment save failed:', { stage: saveStage, cause });
+      setToast(`Could not save assessment during: ${saveStage}. ${detail || 'Unknown Supabase error.'}`);
     }
   };
   const addWorkbook = async () => {
