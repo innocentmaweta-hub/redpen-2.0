@@ -1,7 +1,7 @@
 name: RedPen 2.0 build
 on:
   push:
-    branches: [ui-only-rebuild]
+    branches: [main, ui-only-rebuild]
   pull_request:
     branches: [ui-only-rebuild]
 jobs:
