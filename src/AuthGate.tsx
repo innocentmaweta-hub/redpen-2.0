@@ -45,6 +45,7 @@ export default function AuthGate() {
       return;
     }
     setWorkspaceReady(false);
+    let channel: any = null;
     (async () => {
       const { data, error: loadError } = await supabase
         .from('workspace_snapshots')
@@ -60,8 +61,23 @@ export default function AuthGate() {
         localStorage.removeItem(WORKSPACE_KEY);
       }
       setWorkspaceReady(true);
+      channel = supabase.channel(`redpen-workspace-${session.user.id}`)
+        .on('postgres_changes', {
+          event: 'UPDATE', schema: 'public', table: 'workspace_snapshots',
+          filter: `user_id=eq.${session.user.id}`,
+        }, payload => {
+          const incoming = JSON.stringify(payload.new.data);
+          if (incoming && localStorage.getItem(WORKSPACE_KEY) !== incoming) {
+            localStorage.setItem(WORKSPACE_KEY, incoming);
+            window.dispatchEvent(new CustomEvent('redpen-cloud-workspace', { detail: payload.new.data }));
+          }
+        })
+        .subscribe();
     })();
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+      if (channel) void supabase.removeChannel(channel);
+    };
   }, [session?.user.id]);
 
   const submit = async (event: FormEvent) => {
