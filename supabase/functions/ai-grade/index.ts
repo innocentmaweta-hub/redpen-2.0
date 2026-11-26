@@ -74,7 +74,7 @@ Deno.serve(async (req: Request) => {
       body: JSON.stringify({
         model,
         temperature: 0.1,
-        max_tokens: 6000,
+        max_tokens: 2500,
         response_format: { type: "json_object" },
         messages: [
           { role: "system", content: noScheme ? "You are a careful examination marker. No official marking scheme is available. Create a clearly labelled provisional rubric from the questions, never present it as official, explain all criteria and maximum marks, and require teacher review. Never invent student answers or claim certainty where the paper is ambiguous." : "You are a careful examination marker. Follow the supplied marking scheme exactly. Be transparent about uncertainty. Never invent student answers, marks, or criteria." },
