@@ -32,6 +32,7 @@ function readStore(): { workbooks: Workbook[]; results: Result[] } {
   return { workbooks: starter, results: [] };
 }
 function formatDate(value: string) { return new Date(value).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }); }
+function formatMWK(value: number) { return 'MWK ' + Number(value || 0).toLocaleString('en-US'); }
 function App({ user }: { user: User }) {
   const initial = readStore();
   const skipNextCloudSave = useRef(false);
@@ -81,7 +82,58 @@ function App({ user }: { user: User }) {
   const [members, setMembers] = useState<any[]>([]);
   const [institutionBusy, setInstitutionBusy] = useState(false);
   const [institutionName, setInstitutionName] = useState('');
+  const [billingProducts, setBillingProducts] = useState<any[]>([]);
+  const [activeSubscriptions, setActiveSubscriptions] = useState<any[]>([]);
+  const [paidAssessmentIds, setPaidAssessmentIds] = useState<string[]>([]);
+  const [selectedPaperAssessmentId, setSelectedPaperAssessmentId] = useState('');
+  const [billingBusy, setBillingBusy] = useState('');
 
+
+
+  const refreshBilling = async () => {
+    const billing = supabase as any;
+    const [productsResponse, subscriptionsResponse, chargesResponse] = await Promise.all([
+      billing.from('billing_products').select('id,code,name,billing_type,amount_mwk,interval').eq('active', true).order('amount_mwk'),
+      billing.from('redpen_subscriptions').select('id,status,starts_at,ends_at,billing_products(name,amount_mwk,interval)').eq('status', 'active').gt('ends_at', new Date().toISOString()).order('ends_at', { ascending: false }),
+      billing.from('paper_grading_charges').select('assessment_id'),
+    ]);
+    if (!productsResponse.error) setBillingProducts(productsResponse.data || []);
+    else console.error('Could not load RedPen pricing:', productsResponse.error.message);
+    if (!subscriptionsResponse.error) setActiveSubscriptions(subscriptionsResponse.data || []);
+    else console.error('Could not load RedPen subscriptions:', subscriptionsResponse.error.message);
+    if (!chargesResponse.error) setPaidAssessmentIds((chargesResponse.data || []).map((row: any) => row.assessment_id));
+    else console.error('Could not load paper payment records:', chargesResponse.error.message);
+  };
+  const startBillingCheckout = async (productCode: string, assessmentId?: string) => {
+    if (billingBusy) return;
+    setBillingBusy(productCode);
+    try {
+      const { data, error } = await supabase.functions.invoke('paychangu-payments', {
+        body: { action: 'create_checkout', product_code: productCode, ...(assessmentId ? { assessment_id: assessmentId } : {}) },
+      });
+      if (error || data?.error) throw new Error(data?.error || error?.message || 'Could not start PayChangu checkout.');
+      if (!data?.checkout_url) throw new Error('PayChangu did not return a checkout link.');
+      window.location.assign(data.checkout_url);
+    } catch (cause) {
+      setToast(cause instanceof Error ? cause.message : 'Could not start payment. Please try again.');
+      setBillingBusy('');
+    }
+  };
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      await refreshBilling();
+      if (!alive) return;
+    };
+    void load();
+    const txRef = new URLSearchParams(window.location.search).get('payment');
+    if (txRef) {
+      setScreen('settings');
+      setToast('Returned from PayChangu. Your payment will appear here after provider verification.');
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+    return () => { alive = false; };
+  }, [user.id]);
   useEffect(() => {
     if (skipNextCloudSave.current) { skipNextCloudSave.current = false; return; }
     const snapshot = { workbooks, results, sync_token: uid() };
@@ -883,7 +935,23 @@ function App({ user }: { user: User }) {
         {screen==='history' && <section className="screen-stack"><PageHeading eyebrow="YOUR WORK" title="Grading history" description="Find previous assessments and continue reviewing their records."/><ResultsTable rows={filteredResults} onDelete={deleteResult} onPreview={openSavedDocumentPreview} previewBusyId={batchPreviewBusyId} onReview={openResultForReview} reviewBusyId={batchReviewBusyId} history/></section>}
         {screen==='batch' && <section className="screen-stack"><PageHeading eyebrow="MULTIPLE PAPERS" title="Batch grading" description="Prepare a group of student papers for assessment."/><div className="panel batch-panel"><div className="batch-scheme"><label className="no-scheme-choice"><input type="checkbox" checked={batchNoScheme} onChange={e=>{setBatchNoScheme(e.target.checked);if(e.target.checked)setBatchScheme(null);}}/><span><strong>No marking scheme</strong><small>AI will propose provisional criteria for each paper. All results require teacher review.</small></span></label>{!batchNoScheme && <><Field label="Marking scheme for this batch"><input type="file" accept=".pdf,image/*,.txt" onChange={e => setBatchScheme(e.target.files?.[0] || null)}/></Field><span>{batchScheme ? ("Selected: " + batchScheme.name) : "One marking scheme is applied to every paper in each upload batch."}</span></>}</div><label className="batch-drop"><input type="file" multiple accept=".pdf,image/*" onChange={e=>addBatch(e.target.files)}/><div className="upload-circle"><Upload size={22}/></div><strong>Drop student papers here</strong><span>or browse files · PDF and images · 25 MB per file</span></label>{batchFiles.length>0?<><div className="batch-head"><strong>{batchFiles.length} files added</strong><button className="text-action danger-text" onClick={clearBatch}>Remove all</button></div>{batchFiles.map(f=><div className="batch-file" key={f.id}><FileText size={17}/><span>{f.name}<small>{(f.size/1024/1024).toFixed(2)} MB</small></span><em>{f.status}</em><button className="batch-preview-button" onClick={()=>void openBatchPreview(f)} disabled={!f.storagePath || batchPreviewBusyId===f.id} title="Preview original paper">{batchPreviewBusyId===f.id?<span className="spin-inline"/>:<Eye size={14}/>}<span>{batchPreviewBusyId===f.id?'Loading':'Preview'}</span></button>{(f.status==='Completed'||f.status==='Needs review') && <button className="batch-review-button" onClick={()=>void openBatchReview(f)} disabled={batchReviewBusyId===f.id} title="Open assessment in Grade workspace">{batchReviewBusyId===f.id?<span className="spin-inline"/>:<ClipboardList size={14}/>}<span>{batchReviewBusyId===f.id?'Opening':'Open for Review'}</span></button>}<button className="icon-button" onClick={()=>deleteBatchFile(f.id)} title="Remove paper"><X size={15}/></button></div>)}<div className="notice"><InfoIcon/> Papers are processed one at a time. AI-extracted student details and marks are saved to your workspace; uncertain papers are flagged for review.</div><button className="primary-button batch-process" onClick={processBatch} disabled={batchBusy || !batchFiles.some(f => f.status === "Ready" || f.status === "Failed")}>{batchBusy ? <span className="spin-inline"/> : <Sparkles size={16}/>} {batchBusy ? "Processing papers…" : "Process batch with AI"}</button></>:<div className="empty-inline">No papers added yet. Choose several files to prepare a batch.</div>}</div></section>}
         {screen==='institutions' && <section className="screen-stack"><PageHeading eyebrow="TEAM WORKSPACES" title="Institutions" description="Create a shared institution workspace and give registered teachers access to its workbooks and results."/><div className="institution-grid"><div className="panel"><PanelTitle number="01" title="Create an institution" subtitle="The creator becomes the institution owner."/><div className="institution-create"><Field label="Institution name"><input value={institutionName} onChange={e=>setInstitutionName(e.target.value)} placeholder="e.g. Lilongwe Secondary School"/></Field><button className="primary-button" onClick={createInstitution} disabled={institutionBusy}><Plus size={15}/> Create institution</button></div><div className="divider"/><Field label="Select institution"><select value={activeInstitutionId} onChange={e=>setActiveInstitutionId(e.target.value)}><option value="">Choose an institution</option>{institutions.map(item=><option key={item.id} value={item.id}>{item.name}</option>)}</select></Field><p className="institution-hint">When you create a workbook, the selected institution is attached to it so its teachers can collaborate.</p></div><div className="panel"><PanelTitle number="02" title="Teacher access" subtitle="Add teachers who already have RedPen accounts."/><form className="institution-create" onSubmit={e=>{e.preventDefault();void addInstitutionMember();}}><Field label="Teacher email address"><input type="email" value={memberEmail} onChange={e=>setMemberEmail(e.target.value)} placeholder="teacher@school.edu"/></Field><button className="primary-button" type="submit" disabled={institutionBusy || !activeInstitutionId}><Users size={15}/> Add teacher</button></form><p className="institution-hint">Teachers must register for RedPen first. Only the institution owner or an administrator can manage membership.</p><div className="member-list">{members.map(member=><div className="member-row" key={member.id}><div className="member-avatar">{String(member.name || member.email || 'T').slice(0,1).toUpperCase()}</div><div><strong>{member.name || member.email || 'RedPen teacher'}</strong><small>{member.email} · {member.member_role}</small></div>{member.member_role!=='owner' && <button className="icon-button danger-quiet" onClick={()=>void removeInstitutionMember(member.id)} disabled={institutionBusy} title="Remove access"><Trash2 size={15}/></button>}</div>)}{activeInstitutionId && !members.length && <div className="empty-inline">No member list is available. You need to own this institution or be an administrator to manage its teachers.</div>}{!activeInstitutionId && <div className="empty-inline">Create or select an institution to manage its teachers.</div>}</div></div></div></section>}
-        {screen==='settings' && <section className="screen-stack"><PageHeading eyebrow="PREFERENCES" title="Settings" description="Manage your secure RedPen cloud workspace."/><div className="settings-grid"><div className="panel"><PanelTitle number="01" title="Workspace storage" subtitle="Your records are synchronised to your private RedPen cloud workspace."/><div className="settings-row"><div><strong>Supabase cloud workspace</strong><p>Workbooks, courses and grading results are backed up to your private RedPen database.</p></div><span className="connection-pill"><span/> Active</span></div><div className="settings-row"><div><strong>Export your data</strong><p>Download a backup of your workbooks and grading records.</p></div><button className="secondary-button" onClick={()=>{const blob=new Blob([JSON.stringify({workbooks,results},null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='redpen-backup.json';a.click();URL.revokeObjectURL(a.href);}}>Export backup</button></div></div><div className="panel"><PanelTitle number="02" title="Integrations" subtitle="Core RedPen cloud services are connected."/><div className="integration-row"><div className="integration-icon"><Sparkles size={17}/></div><div><strong>AI grading provider</strong><p>Secure Edge Function deployed. Add AI_API_KEY, AI_PROVIDER and AI_MODEL in Supabase Edge Function Secrets to activate marking.</p></div><span className="status-pending">AWAITING SECRET</span></div><div className="integration-row"><div className="integration-icon"><Archive size={17}/></div><div><strong>Supabase authentication & storage</strong><p>Sign-in, cloud sync and private assessment-file storage are active.</p></div><span className="connection-pill"><span/> CONNECTED</span></div></div></div></section>}
+        {screen==='settings' && <section className="screen-stack"><PageHeading eyebrow="PREFERENCES" title="Settings" description="Manage your secure RedPen cloud workspace."/>
+          <div className="settings-grid">
+            <div className="panel"><PanelTitle number="01" title="Workspace storage" subtitle="Your records are synchronised to your private RedPen cloud workspace."/><div className="settings-row"><div><strong>Supabase cloud workspace</strong><p>Workbooks, courses and grading results are backed up to your private RedPen database.</p></div><span className="connection-pill"><span/> Active</span></div><div className="settings-row"><div><strong>Export your data</strong><p>Download a backup of your workbooks and grading records.</p></div><button className="secondary-button" onClick={()=>{const blob=new Blob([JSON.stringify({workbooks,results},null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='redpen-backup.json';a.click();URL.revokeObjectURL(a.href);}}>Export backup</button></div></div>
+            <div className="panel"><PanelTitle number="02" title="Integrations" subtitle="Core RedPen cloud services are connected."/><div className="integration-row"><div className="integration-icon"><Sparkles size={17}/></div><div><strong>AI grading provider</strong><p>Secure Edge Function deployed. Add AI_API_KEY, AI_PROVIDER and AI_MODEL in Supabase Edge Function Secrets to activate marking.</p></div><span className="status-pending">AWAITING SECRET</span></div><div className="integration-row"><div className="integration-icon"><Archive size={17}/></div><div><strong>Supabase authentication & storage</strong><p>Sign-in, cloud sync and private assessment-file storage are active.</p></div><span className="connection-pill"><span/> CONNECTED</span></div></div>
+          </div>
+          <div className="panel billing-panel"><PanelTitle number="03" title="RedPen plans & payments" subtitle="Choose a subscription for ongoing use, or pay separately for each saved paper."/>
+            {activeSubscriptions.length>0 ? <div className="billing-active"><CheckCircle2 size={17}/><div><strong>Active subscription</strong><p>{activeSubscriptions[0].billing_products?.name || 'RedPen subscription'} · Valid until {formatDate(activeSubscriptions[0].ends_at)}</p></div></div> : <div className="billing-note">No active subscription on this account. You can purchase a monthly or annual plan below.</div>}
+            <div className="billing-plans">
+              <div className="billing-plan"><span className="eyebrow">MONTHLY</span><strong>MWK {Number(billingProducts.find(p=>p.code==='monthly_subscription')?.amount_mwk ?? 15000).toLocaleString('en-US')}</strong><p>One month of RedPen subscription access.</p><button className="primary-button" onClick={()=>void startBillingCheckout('monthly_subscription')} disabled={!!billingBusy || !billingProducts.some(p=>p.code==='monthly_subscription')}>{billingBusy==='monthly_subscription'?<span className="spin-inline"/>:'Choose monthly plan'}</button></div>
+              <div className="billing-plan featured"><span className="eyebrow">ANNUAL · SAVE MWK 40,000</span><strong>MWK {Number(billingProducts.find(p=>p.code==='annual_subscription')?.amount_mwk ?? 140000).toLocaleString('en-US')}</strong><p>One year of RedPen subscription access.</p><button className="primary-button" onClick={()=>void startBillingCheckout('annual_subscription')} disabled={!!billingBusy || !billingProducts.some(p=>p.code==='annual_subscription')}>{billingBusy==='annual_subscription'?<span className="spin-inline"/>:'Choose annual plan'}</button></div>
+            </div>
+            <div className="billing-paper"><div><strong>Pay per paper</strong><p>Pay MWK {Number(billingProducts.find(p=>p.code==='per_paper')?.amount_mwk ?? 50).toLocaleString('en-US')} for an individual saved assessment.</p></div>
+              {results.filter(r=>r.assessmentId && !paidAssessmentIds.includes(r.assessmentId)).length>0 ? <div className="billing-paper-controls"><select aria-label="Choose an assessment to pay for" value={selectedPaperAssessmentId || results.find(r=>r.assessmentId && !paidAssessmentIds.includes(r.assessmentId))?.assessmentId || ''} onChange={e=>setSelectedPaperAssessmentId(e.target.value)}><option value="">Choose a saved paper</option>{results.filter(r=>r.assessmentId && !paidAssessmentIds.includes(r.assessmentId)).map(r=><option key={r.assessmentId} value={r.assessmentId}>{r.student.name} · {r.courseName} · {formatDate(r.date)}</option>)}</select><button className="secondary-button" onClick={()=>void startBillingCheckout('per_paper',selectedPaperAssessmentId || results.find(r=>r.assessmentId && !paidAssessmentIds.includes(r.assessmentId))?.assessmentId)} disabled={!!billingBusy || !billingProducts.some(p=>p.code==='per_paper') || !(selectedPaperAssessmentId || results.some(r=>r.assessmentId && !paidAssessmentIds.includes(r.assessmentId)))}>{billingBusy==='per_paper'?<span className="spin-inline"/>:'Pay MWK 50'}</button></div> : <span className="billing-paid">All saved papers in this account have been paid for.</span>}
+            </div>
+            <div className="billing-footnote">Payments are processed securely through PayChangu. A payment is recorded only after server-side transaction verification. Per-paper payment is currently available for assessments already saved in Results.</div>
+          </div>
+        </section>}
       </div>
     </main>
     {yazaOpen && <div className="yaza-panel"><div className="yaza-head"><div className="yaza-brand"><div><Bot size={18}/></div><span><strong>Yaza AI</strong><small>RedPen guide</small></span></div><button className="icon-button" onClick={()=>setYazaOpen(false)}><X size={18}/></button></div><div className="yaza-messages">{yazaMessages.map((m,i)=><div key={i} className={m.role==='user'?'yaza-message user-message':'yaza-message'}>{m.text}</div>)}{yazaBusy&&<div className="yaza-thinking"><span className="spin-inline"/> Yaza is thinking and checking available actions…</div>}</div><form className="yaza-compose" onSubmit={e=>{e.preventDefault();void sendYaza();}}><input value={yazaInput} onChange={e=>setYazaInput(e.target.value)} placeholder="Ask Yaza to navigate, edit marks, add questions…"/><button className="primary-button" type="submit" disabled={!yazaInput.trim()||yazaBusy}>{yazaBusy?<span className="spin-inline"/>:<ChevronRight size={17}/>}</button></form></div>}
