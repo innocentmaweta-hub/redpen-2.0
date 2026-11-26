@@ -204,7 +204,7 @@ function App({ user }: { user: User }) {
   const activeCourse = activeWorkbook?.courses.find(c => c.id === activeCourseId) || activeWorkbook?.courses[0] || null;
   const paperMarks = (() => { try { const value = JSON.parse(paperAnnotations.__marks__ || '[]'); return Array.isArray(value) ? value : []; } catch { return []; } })();
   const paperMarkMeta = (() => { try { return JSON.parse(paperAnnotations.__marking_meta__ || '{}') as { enabled?: boolean; maximum?: string }; } catch { return {}; } })();
-  const marksModeEnabled = Boolean(paperMarkMeta.enabled);
+  const marksModeEnabled = Boolean(paperMarkMeta.enabled || paperMarks.length > 0);
   const totalMarks = marksModeEnabled ? Math.max(0, Number(paperMarkMeta.maximum) || 0) : questions.reduce((sum, q) => sum + Math.max(0, Number(q.max) || 0), 0);
   const earnedMarks = marksModeEnabled
     ? paperMarks.reduce((sum: number, mark: any) => sum + Math.max(0, Number(mark.score) || 0), 0)
