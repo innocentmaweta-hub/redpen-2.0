@@ -202,8 +202,13 @@ function App({ user }: { user: User }) {
   }, [user.id]);
   const activeWorkbook = workbooks.find(w => w.id === activeWorkbookId) || null;
   const activeCourse = activeWorkbook?.courses.find(c => c.id === activeCourseId) || activeWorkbook?.courses[0] || null;
-  const totalMarks = questions.reduce((sum, q) => sum + Math.max(0, Number(q.max) || 0), 0);
-  const earnedMarks = questions.reduce((sum, q) => sum + Math.min(Math.max(0, Number(q.score) || 0), Math.max(0, Number(q.max) || 0)), 0);
+  const paperMarks = (() => { try { const value = JSON.parse(paperAnnotations.__marks__ || '[]'); return Array.isArray(value) ? value : []; } catch { return []; } })();
+  const paperMarkMeta = (() => { try { return JSON.parse(paperAnnotations.__marking_meta__ || '{}') as { enabled?: boolean; maximum?: string }; } catch { return {}; } })();
+  const marksModeEnabled = Boolean(paperMarkMeta.enabled);
+  const totalMarks = marksModeEnabled ? Math.max(0, Number(paperMarkMeta.maximum) || 0) : questions.reduce((sum, q) => sum + Math.max(0, Number(q.max) || 0), 0);
+  const earnedMarks = marksModeEnabled
+    ? paperMarks.reduce((sum: number, mark: any) => sum + Math.max(0, Number(mark.score) || 0), 0)
+    : questions.reduce((sum, q) => sum + Math.min(Math.max(0, Number(q.score) || 0), Math.max(0, Number(q.max) || 0)), 0);
   const percentage = totalMarks ? Math.round(earnedMarks / totalMarks * 1000) / 10 : 0;
   const resultCourses = useMemo(() => Array.from(new Map(results.map(r => [r.courseId || r.courseName, { id: r.courseId || r.courseName, name: r.courseName }])).values()).sort((a,b)=>a.name.localeCompare(b.name)), [results]);
   const resultInstitutions = useMemo(() => Array.from(new Set(results.map(r => r.institutionName || '').filter(Boolean))).sort((a,b)=>a.localeCompare(b)), [results]);
@@ -216,6 +221,20 @@ function App({ user }: { user: User }) {
   ), [results, search, resultCourseFilter, resultInstitutionFilter, resultWorkbookFilter]);
   const navigate = (next: Screen) => { setScreen(next); setMobileNav(false); };
   const startGrading = () => { setReviewContext(null); setStudent({ name: '', id: '', className: '' }); setScheme(null); setNoScheme(false); setPaper(null); setPaperUrl(''); setQuestions([{ id: uid(), label: 'Question 1', max: 10, score: 0, feedback: '' }]); setPaperAnnotations({}); setOverallFeedback(''); setMode('manual'); setAiGradingMeta(null); navigate('grade'); };
+  const finishAnnotation = () => {
+    if (marksModeEnabled) {
+      let maximum = Number(paperMarkMeta.maximum) || 0;
+      if (maximum <= 0) {
+        const entered = window.prompt('Enter the total possible marks for this paper');
+        if (entered === null) return;
+        maximum = Number(entered);
+        if (!Number.isFinite(maximum) || maximum <= 0) { setToast('Enter a valid total possible mark greater than zero.'); return; }
+        setPaperAnnotations(current => ({ ...current, __marking_meta__: JSON.stringify({ ...paperMarkMeta, enabled: true, maximum: String(maximum) }) }));
+      }
+      if (earnedMarks > maximum) { setToast('The awarded marks exceed the maximum possible marks. Correct the total or the annotations before finishing.'); return; }
+    }
+    setAnnotationOpen(false);
+  };
   const onPaper = (file?: File) => { if (!file) return; if (file.size > 25 * 1024 * 1024) { setToast('Please choose a file smaller than 25 MB.'); return; } setPaper(file); setPaperAnnotations({}); if (paperUrl) URL.revokeObjectURL(paperUrl); setPaperUrl(URL.createObjectURL(file)); };
   const runAiGrading = async (schemeFile = (noScheme ? null : scheme), paperFile = paper) => {
     if ((!schemeFile && !noScheme) || !paperFile) { setToast('Choose a marking scheme or select No marking scheme, then upload the student paper.'); return null; }
@@ -252,8 +271,14 @@ function App({ user }: { user: User }) {
   const saveResult = async () => {
     if (!student.name.trim()) { setToast('Enter the student name before saving.'); return; }
     if (!activeCourse) { setToast('Create or select a course first.'); return; }
-    if (!questions.length || totalMarks <= 0) { setToast('Add at least one question with a maximum mark.'); return; }
-    if (questions.some(q => q.score < 0 || q.score > q.max || q.max <= 0)) { setToast('Check the question scores: each score must be within its maximum.'); return; }
+    if (marksModeEnabled) {
+      if (!paperMarks.length) { setToast('Add at least one score on the paper before saving.'); return; }
+      if (totalMarks <= 0) { setToast('Enter the total possible marks in the paper annotation canvas.'); return; }
+      if (earnedMarks > totalMarks) { setToast('The awarded marks exceed the total possible marks.'); return; }
+    } else {
+      if (!questions.length || totalMarks <= 0) { setToast('Add at least one question with a maximum mark.'); return; }
+      if (questions.some(q => q.score < 0 || q.score > q.max || q.max <= 0)) { setToast('Check the question scores: each score must be within its maximum.'); return; }
+    }
     if (reviewContext) {
       try {
         const { error: studentUpdateError } = await supabase.from('students').update({
@@ -863,7 +888,7 @@ function App({ user }: { user: User }) {
     </main>
     {yazaOpen && <div className="yaza-panel"><div className="yaza-head"><div className="yaza-brand"><div><Bot size={18}/></div><span><strong>Yaza AI</strong><small>RedPen guide</small></span></div><button className="icon-button" onClick={()=>setYazaOpen(false)}><X size={18}/></button></div><div className="yaza-messages">{yazaMessages.map((m,i)=><div key={i} className={m.role==='user'?'yaza-message user-message':'yaza-message'}>{m.text}</div>)}{yazaBusy&&<div className="yaza-thinking"><span className="spin-inline"/> Yaza is thinking and checking available actions…</div>}</div><form className="yaza-compose" onSubmit={e=>{e.preventDefault();void sendYaza();}}><input value={yazaInput} onChange={e=>setYazaInput(e.target.value)} placeholder="Ask Yaza to navigate, edit marks, add questions…"/><button className="primary-button" type="submit" disabled={!yazaInput.trim()||yazaBusy}>{yazaBusy?<span className="spin-inline"/>:<ChevronRight size={17}/>}</button></form></div>}
     {modal && <div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)setModal(null);}}><form className="modal-card" onSubmit={e=>{e.preventDefault();modal==='workbook'?addWorkbook():addCourse();}}><div className="modal-head"><div><span className="eyebrow">{modal==='workbook'?'WORKBOOK SETUP':'COURSE SETUP'}</span><h2>{modal==='workbook'?'Create a workbook':'Add a course'}</h2></div><button type="button" className="icon-button" onClick={()=>setModal(null)}><X size={18}/></button></div><p className="modal-description">{modal==='workbook'?'A workbook keeps related courses and student assessments together.':'Add a subject or class to the currently selected workbook.'}</p>{modal==='workbook'?<><Field label="Workbook name"><input autoFocus required value={workbookName} onChange={e=>setWorkbookName(e.target.value)} placeholder="e.g. 2026 MSCE Examinations"/></Field><Field label="Institution (optional)"><input value={institution} onChange={e=>setInstitution(e.target.value)} placeholder="School or institution"/></Field><Field label="Share with institution"><select value={activeInstitutionId} onChange={e=>setActiveInstitutionId(e.target.value)}><option value="">Personal workspace</option>{institutions.map(item=><option key={item.id} value={item.id}>{item.name}</option>)}</select></Field></>:<><Field label="Course code (optional)"><input value={courseCode} onChange={e=>setCourseCode(e.target.value)} placeholder="e.g. BIO 101"/></Field><Field label="Course name"><input autoFocus required value={courseName} onChange={e=>setCourseName(e.target.value)} placeholder="e.g. Biology"/></Field></>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={()=>setModal(null)}>Cancel</button><button type="submit" className="primary-button"><Plus size={15}/>{modal==='workbook'?'Create workbook':'Add course'}</button></div></form></div>}
-    {annotationOpen && paper && <div className="paper-preview-backdrop annotation-backdrop" role="presentation" onMouseDown={e=>{if(e.target===e.currentTarget)setAnnotationOpen(false);}}><section className="paper-preview-modal annotation-modal" role="dialog" aria-modal="true" aria-label="Annotate student paper"><header className="paper-preview-header"><div><span className="eyebrow">PAPER ANNOTATION</span><strong>{paper.name}</strong></div><button className="icon-button" onClick={()=>setAnnotationOpen(false)} aria-label="Close paper annotation"><X size={19}/></button></header><div className="paper-preview-content annotation-content"><ManualPaperCanvas file={paper} annotations={paperAnnotations} onChange={setPaperAnnotations}/></div><footer className="paper-preview-footer"><span>Annotations are saved when you save this assessment.</span><button className="primary-button" onClick={()=>setAnnotationOpen(false)}>Done</button></footer></section></div>}
+    {annotationOpen && paper && <div className="paper-preview-backdrop annotation-backdrop" role="presentation" onMouseDown={e=>{if(e.target===e.currentTarget)finishAnnotation();}}><section className="paper-preview-modal annotation-modal" role="dialog" aria-modal="true" aria-label="Annotate student paper"><header className="paper-preview-header"><div><span className="eyebrow">PAPER ANNOTATION</span><strong>{paper.name}</strong></div><button className="icon-button" onClick={finishAnnotation} aria-label="Close paper annotation"><X size={19}/></button></header><div className="paper-preview-content annotation-content"><ManualPaperCanvas file={paper} annotations={paperAnnotations} onChange={setPaperAnnotations}/></div><footer className="paper-preview-footer"><span>Annotations and scores are saved with this assessment.</span><button className="primary-button" onClick={finishAnnotation}>Done</button></footer></section></div>}
     {batchPreview && <div className="paper-preview-backdrop" role="presentation" onMouseDown={e=>{if(e.target===e.currentTarget)setBatchPreview(null);}}><section className="paper-preview-modal" role="dialog" aria-modal="true" aria-label={'Document preview: '+batchPreview.name}><header className="paper-preview-header"><div><span className="eyebrow">SAVED DOCUMENT PREVIEW</span><strong>{batchPreview.name}</strong></div><button className="icon-button" onClick={()=>setBatchPreview(null)} aria-label="Close paper preview"><X size={19}/></button></header><div className="paper-preview-content">{batchPreview.mimeType==='application/pdf'||batchPreview.mimeType==='text/plain'?<iframe src={batchPreview.url} title={'Preview of '+batchPreview.name}/>:<img src={batchPreview.url} alt={'Preview of '+batchPreview.name}/>}</div><footer className="paper-preview-footer"><span>Original saved document · Private, read-only preview</span><button className="secondary-button" onClick={()=>setBatchPreview(null)}>Close preview</button></footer></section></div>}
     {toast && <div className="toast"><CheckCircle2 size={16}/>{toast}</div>}
   </div>;
