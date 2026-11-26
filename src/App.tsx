@@ -202,7 +202,17 @@ function App({ user }: { user: User }) {
     try {
       const [schemeDoc, paperDoc] = await Promise.all([schemeFile ? extractDocument(schemeFile) : Promise.resolve({ text: '', images: [], warnings: [] }), extractDocument(paperFile)]);
       const { data, error } = await supabase.functions.invoke('ai-grade', { body: { noScheme: !schemeFile, schemeText: schemeDoc.text, schemeImages: schemeDoc.images, paperText: paperDoc.text, paperImages: paperDoc.images, sourceWarnings: [...schemeDoc.warnings, ...paperDoc.warnings] } });
-      if (error) throw new Error(data?.error || error.message);
+      if (error) {
+        let detail = data?.error || '';
+        const context = (error as any).context;
+        if (!detail && context && typeof context.clone === 'function') {
+          try {
+            const responseBody = await context.clone().json();
+            detail = responseBody?.error || responseBody?.message || '';
+          } catch { /* Keep the SDK error when the response is not JSON. */ }
+        }
+        throw new Error(detail || (error.message + ' (AI grading service). Check Supabase Edge Function logs for the provider response.'));
+      }
       if (data?.error) throw new Error(data.error);
       if (!Array.isArray(data?.questions) || !data.questions.length) throw new Error('The AI did not return question-level marks.');
       const marks: Question[] = data.questions.map((q: any, i: number) => ({ id: q.id || uid(), label: String(q.label || ('Question ' + (i + 1))), max: Number(q.max), score: Number(q.score), feedback: String(q.feedback || '') }));
