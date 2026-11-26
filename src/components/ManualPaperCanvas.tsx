@@ -24,12 +24,14 @@ export default function ManualPaperCanvas({ file, annotations, onChange }: Props
   const pdfRef = useRef<any>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
   const annotationsRef = useRef(annotations);
+  const snapshotRef = useRef<string | null>(null);
   useEffect(() => { annotationsRef.current = annotations; }, [annotations]);
 
   const saveSnapshot = useCallback(() => {
     const canvas = inkRef.current;
     if (!canvas) return;
     const url = canvas.toDataURL('image/png');
+    snapshotRef.current = url;
     setUndoStack(stack => [...stack.slice(-39), url]);
     setRedoStack([]);
   }, []);
@@ -154,7 +156,7 @@ export default function ManualPaperCanvas({ file, annotations, onChange }: Props
     if (tool === 'eraser') ctx.globalCompositeOperation = 'destination-out';
     else { ctx.globalCompositeOperation = 'source-over'; ctx.strokeStyle = color; }
     if (tool === 'line' || tool === 'rectangle') {
-      const saved = undoStack[undoStack.length - 1];
+      const saved = snapshotRef.current;
       if (saved) { const image = new Image(); image.onload = () => { ctx.clearRect(0, 0, inkRef.current!.width, inkRef.current!.height); ctx.drawImage(image, 0, 0); ctx.beginPath(); if (tool === 'line') { ctx.moveTo(start.current!.x, start.current!.y); ctx.lineTo(point.x, point.y); } else ctx.rect(start.current!.x, start.current!.y, point.x - start.current!.x, point.y - start.current!.y); ctx.stroke(); }; image.src = saved; }
     } else { ctx.lineTo(point.x, point.y); ctx.stroke(); }
   };
