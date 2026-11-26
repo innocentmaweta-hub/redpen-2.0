@@ -4,7 +4,7 @@ A clean React + TypeScript examination marking workspace. The legacy application
 
 ## Production services
  
-- Supabase project: `RedPen 2.0`
+- Supabase project: `RedPen 2.0` 
 - Project ref: `kckljigwklpezqvaorao` 
 - Region: `eu-west-1` (Ireland)
 - API URL: `https://kckljigwklpezqvaorao.supabase.co`
