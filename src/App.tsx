@@ -32,7 +32,6 @@ function readStore(): { workbooks: Workbook[]; results: Result[] } {
   return { workbooks: starter, results: [] };
 }
 function formatDate(value: string) { return new Date(value).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }); }
-function formatMWK(value: number) { return 'MWK ' + Number(value || 0).toLocaleString('en-US'); }
 function App({ user }: { user: User }) {
   const initial = readStore();
   const skipNextCloudSave = useRef(false);
@@ -134,6 +133,9 @@ function App({ user }: { user: User }) {
     }
     return () => { alive = false; };
   }, [user.id]);
+  useEffect(() => {
+    if (screen === 'settings') void refreshBilling();
+  }, [screen]);
   useEffect(() => {
     if (skipNextCloudSave.current) { skipNextCloudSave.current = false; return; }
     const snapshot = { workbooks, results, sync_token: uid() };
