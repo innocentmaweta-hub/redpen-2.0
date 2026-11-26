@@ -66,6 +66,8 @@ function App({ user }: { user: User }) {
   const [batchBusy, setBatchBusy] = useState(false);
   const [batchPreview, setBatchPreview] = useState<BatchPreview | null>(null);
   const [batchPreviewBusyId, setBatchPreviewBusyId] = useState<string | null>(null);
+  const [batchReviewBusyId, setBatchReviewBusyId] = useState<string | null>(null);
+  const [reviewContext, setReviewContext] = useState<{ assessmentId: string; studentId: string; schemePath?: string; paperPath?: string } | null>(null);
   const [institutions, setInstitutions] = useState<{ id: string; name: string; owner_id: string }[]>([]);
   const [activeInstitutionId, setActiveInstitutionId] = useState('');
   const [memberEmail, setMemberEmail] = useState('');
@@ -235,6 +237,40 @@ function App({ user }: { user: User }) {
     if (!activeCourse) { setToast('Create or select a course first.'); return; }
     if (!questions.length || totalMarks <= 0) { setToast('Add at least one question with a maximum mark.'); return; }
     if (questions.some(q => q.score < 0 || q.score > q.max || q.max <= 0)) { setToast('Check the question scores: each score must be within its maximum.'); return; }
+    if (reviewContext) {
+      try {
+        const { error: studentUpdateError } = await supabase.from('students').update({
+          full_name: student.name.trim(), student_number: student.id.trim() || null,
+          class_name: student.className.trim() || null,
+        }).eq('id', reviewContext.studentId);
+        if (studentUpdateError) throw studentUpdateError;
+        const { error: marksUpdateError } = await supabase.from('grading_results').update({
+          score: earnedMarks, maximum_score: totalMarks, percentage,
+          grade: gradeFor(percentage), feedback: overallFeedback,
+          question_scores: questions.map(q => ({ ...q })),
+        }).eq('assessment_id', reviewContext.assessmentId);
+        if (marksUpdateError) throw marksUpdateError;
+        const { error: assessmentUpdateError } = await supabase.from('assessments').update({ status: 'completed' }).eq('id', reviewContext.assessmentId);
+        if (assessmentUpdateError) throw assessmentUpdateError;
+        await supabase.from('ai_grading_runs').update({ status: 'completed' }).eq('assessment_id', reviewContext.assessmentId);
+        const revised: Result = {
+          id: reviewContext.assessmentId, assessmentId: reviewContext.assessmentId,
+          schemePath: reviewContext.schemePath, paperPath: reviewContext.paperPath,
+          student: { ...student }, courseName: activeCourse.name, workbookName: activeWorkbook?.name || '',
+          date: new Date().toISOString(), questions: questions.map(q => ({ ...q })),
+          total: earnedMarks, maximum: totalMarks, percentage, grade: gradeFor(percentage),
+          feedback: overallFeedback, paperName: paper?.name || '',
+        };
+        setResults(current => current.map(item => item.assessmentId === reviewContext.assessmentId ? revised : item));
+        setReviewContext(null);
+        setToast('Review saved. The existing batch assessment has been updated and approved.');
+        navigate('results');
+      } catch (cause) {
+        const detail = cause instanceof Error ? cause.message : 'Please try again.';
+        setToast('Could not save review: ' + detail);
+      }
+      return;
+    }
     const assessmentId = uid();
     const uploadedPaths: string[] = [];
     const uploadAssessmentFile = async (file: File | null, kind: 'scheme' | 'paper') => {
@@ -399,6 +435,59 @@ function App({ user }: { user: User }) {
     const url = batchPreview.url;
     return () => URL.revokeObjectURL(url);
   }, [batchPreview]);
+  const openBatchReview = async (file: BatchFile) => {
+    const result = results.find(item => item.paperPath === file.storagePath && item.assessmentId);
+    if (!result?.assessmentId || !file.storagePath) {
+      setToast('The saved assessment for this paper could not be found. Please refresh the batch and try again.');
+      return;
+    }
+    setBatchReviewBusyId(file.id);
+    try {
+      const [{ data: assessment, error: assessmentError }, { data: paperBlob, error: paperError }] = await Promise.all([
+        supabase.from('assessments').select('id,student_id,workbook_id,course_id,marking_scheme_path,answer_paper_path').eq('id', result.assessmentId).single(),
+        supabase.storage.from('redpen-assessment-files').download(file.storagePath),
+      ]);
+      if (assessmentError || !assessment) throw assessmentError || new Error('Assessment record not found.');
+      if (paperError || !paperBlob) throw paperError || new Error('Could not retrieve the original paper.');
+      let schemeFile: File | null = null;
+      if (assessment.marking_scheme_path) {
+        const { data: schemeBlob, error: schemeError } = await supabase.storage.from('redpen-assessment-files').download(assessment.marking_scheme_path);
+        if (schemeError || !schemeBlob) throw schemeError || new Error('Could not retrieve the marking scheme.');
+        const schemeName = assessment.marking_scheme_path.split('/').pop() || 'marking-scheme.pdf';
+        schemeFile = new File([schemeBlob], schemeName, { type: schemeBlob.type || (schemeName.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'image/jpeg') });
+      }
+      const paperType = paperBlob.type || (file.name.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'image/jpeg');
+      const paperFile = new File([paperBlob], file.name, { type: paperType });
+      const aiLogResponse = await supabase.from('ai_grading_runs').select('provider,model,output_summary,status').eq('assessment_id', result.assessmentId).maybeSingle();
+      const aiLog = aiLogResponse.data;
+      if (paperUrl) URL.revokeObjectURL(paperUrl);
+      setPaper(paperFile);
+      setPaperUrl(URL.createObjectURL(paperBlob));
+      setScheme(schemeFile);
+      setNoScheme(!schemeFile);
+      setStudent({ ...result.student });
+      setQuestions(result.questions.map((question, index) => ({ ...question, id: question.id || uid(), label: question.label || 'Question ' + (index + 1) })));
+      setOverallFeedback(result.feedback || '');
+      setMode('ai');
+      const output = aiLog?.output_summary && typeof aiLog.output_summary === 'object' ? aiLog.output_summary as any : {};
+      setAiGradingMeta({
+        provider: aiLog?.provider || 'AI provider', model: aiLog?.model || 'configured model',
+        usage: null, needsReview: true,
+        reviewNotes: Array.isArray(output.review_notes) ? output.review_notes : [],
+      });
+      setActiveWorkbookId(assessment.workbook_id || '');
+      setActiveCourseId(assessment.course_id || '');
+      setReviewContext({
+        assessmentId: assessment.id, studentId: assessment.student_id,
+        schemePath: assessment.marking_scheme_path || undefined,
+        paperPath: assessment.answer_paper_path || undefined,
+      });
+      navigate('grade');
+      setToast('Batch assessment loaded. Review and correct the marks, then save to approve this existing result.');
+    } catch (cause) {
+      setToast('Could not open paper for review: ' + (cause instanceof Error ? cause.message : 'Please try again.'));
+    } finally { setBatchReviewBusyId(null); }
+  };
   const processBatch = async () => {
     if (!batchFiles.length) return;
     if (!activeCourse) { setToast('Select or create a course before processing this batch.'); return; }
@@ -594,7 +683,7 @@ function App({ user }: { user: User }) {
           </div><aside className="grade-aside"><div className="panel preview-panel"><div className="aside-title"><span>STUDENT PAPER</span><span className={paper?'status-ready':'status-pending'}>{paper?'UPLOADED':'AWAITING FILE'}</span></div>{paperUrl && paper?.type.startsWith('image/')?<img className="paper-image" src={paperUrl} alt="Student paper preview"/>:paperUrl && paper?.type==='application/pdf'?<iframe className="paper-frame" src={paperUrl} title="Student paper preview"/>:<div className="paper-empty"><FileText size={34}/><strong>No paper uploaded</strong><span>Upload a PDF or image to preview it here.</span></div>}{paper && <div className="file-meta"><FileText size={14}/><span>{paper.name}</span></div>}</div><div className="panel scheme-summary"><div className="aside-title">MARKING SCHEME</div>{noScheme?<p>AI-generated criteria · teacher approval required.</p>:scheme?<div className="file-meta"><CheckCircle2 size={15}/><span>{scheme.name}</span></div>:<p>No marking scheme uploaded yet.</p>}<div className="divider"/><div className="summary-line"><span>Questions</span><strong>{questions.length}</strong></div><div className="summary-line"><span>Total possible marks</span><strong>{totalMarks}</strong></div></div><div className="ai-note"><Sparkles size={17}/><div><strong>AI-assisted marking</strong><p>{aiGradingMeta ? ("Drafted with " + aiGradingMeta.provider + " · " + aiGradingMeta.model + ". Check all marks before saving.") : "Upload a scheme and answer paper, choose AI mode, then run AI marking. Review the draft before saving."}</p></div></div></aside></div></section>}
         {screen==='results' && <section className="screen-stack"><PageHeading eyebrow="ASSESSMENT OUTPUT" title="Results" description="Review saved student assessments and their final scores."/><div className="report-actions"><button className="secondary-button" onClick={() => void exportResultsExcel(filteredResults.map(r => ({student:r.student.name,studentId:r.student.id,course:r.courseName,workbook:r.workbookName,date:formatDate(r.date),score:r.total,maximum:r.maximum,percentage:r.percentage,grade:r.grade,feedback:r.feedback})))} disabled={!filteredResults.length}><FileText size={15}/> Export Excel</button><button className="secondary-button" onClick={() => exportResultsPdf(filteredResults.map(r => ({student:r.student.name,studentId:r.student.id,course:r.courseName,workbook:r.workbookName,date:formatDate(r.date),score:r.total,maximum:r.maximum,percentage:r.percentage,grade:r.grade,feedback:r.feedback})))} disabled={!filteredResults.length}><Printer size={15}/> Export PDF</button></div><div className="metric-grid compact"><Metric icon={Users} label="Students assessed" value={results.length}/><Metric icon={BarChart3} label="Average score" value={results.length?Math.round(results.reduce((s,r)=>s+r.percentage,0)/results.length)+'%':'—'}/><Metric icon={Award} label="Pass rate" value={results.length?Math.round(results.filter(r=>r.percentage>=50).length/results.length*100)+'%':'—'}/></div><ResultsTable rows={filteredResults} onDelete={deleteResult}/></section>}
         {screen==='history' && <section className="screen-stack"><PageHeading eyebrow="YOUR WORK" title="Grading history" description="Find previous assessments and continue reviewing their records."/><ResultsTable rows={filteredResults} onDelete={deleteResult} history/></section>}
-        {screen==='batch' && <section className="screen-stack"><PageHeading eyebrow="MULTIPLE PAPERS" title="Batch grading" description="Prepare a group of student papers for assessment."/><div className="panel batch-panel"><div className="batch-scheme"><label className="no-scheme-choice"><input type="checkbox" checked={batchNoScheme} onChange={e=>{setBatchNoScheme(e.target.checked);if(e.target.checked)setBatchScheme(null);}}/><span><strong>No marking scheme</strong><small>AI will propose provisional criteria for each paper. All results require teacher review.</small></span></label>{!batchNoScheme && <><Field label="Marking scheme for this batch"><input type="file" accept=".pdf,image/*,.txt" onChange={e => setBatchScheme(e.target.files?.[0] || null)}/></Field><span>{batchScheme ? ("Selected: " + batchScheme.name) : "One marking scheme is applied to every paper in each upload batch."}</span></>}</div><label className="batch-drop"><input type="file" multiple accept=".pdf,image/*" onChange={e=>addBatch(e.target.files)}/><div className="upload-circle"><Upload size={22}/></div><strong>Drop student papers here</strong><span>or browse files · PDF and images · 25 MB per file</span></label>{batchFiles.length>0?<><div className="batch-head"><strong>{batchFiles.length} files added</strong><button className="text-action danger-text" onClick={clearBatch}>Remove all</button></div>{batchFiles.map(f=><div className="batch-file" key={f.id}><FileText size={17}/><span>{f.name}<small>{(f.size/1024/1024).toFixed(2)} MB</small></span><em>{f.status}</em><button className="batch-preview-button" onClick={()=>void openBatchPreview(f)} disabled={!f.storagePath || batchPreviewBusyId===f.id} title="Preview original paper">{batchPreviewBusyId===f.id?<span className="spin-inline"/>:<Eye size={14}/>}<span>{batchPreviewBusyId===f.id?'Loading':'Preview'}</span></button><button className="icon-button" onClick={()=>deleteBatchFile(f.id)} title="Remove paper"><X size={15}/></button></div>)}<div className="notice"><InfoIcon/> Papers are processed one at a time. AI-extracted student details and marks are saved to your workspace; uncertain papers are flagged for review.</div><button className="primary-button batch-process" onClick={processBatch} disabled={batchBusy || !batchFiles.some(f => f.status === "Ready" || f.status === "Failed")}>{batchBusy ? <span className="spin-inline"/> : <Sparkles size={16}/>} {batchBusy ? "Processing papers…" : "Process batch with AI"}</button></>:<div className="empty-inline">No papers added yet. Choose several files to prepare a batch.</div>}</div></section>}
+        {screen==='batch' && <section className="screen-stack"><PageHeading eyebrow="MULTIPLE PAPERS" title="Batch grading" description="Prepare a group of student papers for assessment."/><div className="panel batch-panel"><div className="batch-scheme"><label className="no-scheme-choice"><input type="checkbox" checked={batchNoScheme} onChange={e=>{setBatchNoScheme(e.target.checked);if(e.target.checked)setBatchScheme(null);}}/><span><strong>No marking scheme</strong><small>AI will propose provisional criteria for each paper. All results require teacher review.</small></span></label>{!batchNoScheme && <><Field label="Marking scheme for this batch"><input type="file" accept=".pdf,image/*,.txt" onChange={e => setBatchScheme(e.target.files?.[0] || null)}/></Field><span>{batchScheme ? ("Selected: " + batchScheme.name) : "One marking scheme is applied to every paper in each upload batch."}</span></>}</div><label className="batch-drop"><input type="file" multiple accept=".pdf,image/*" onChange={e=>addBatch(e.target.files)}/><div className="upload-circle"><Upload size={22}/></div><strong>Drop student papers here</strong><span>or browse files · PDF and images · 25 MB per file</span></label>{batchFiles.length>0?<><div className="batch-head"><strong>{batchFiles.length} files added</strong><button className="text-action danger-text" onClick={clearBatch}>Remove all</button></div>{batchFiles.map(f=><div className="batch-file" key={f.id}><FileText size={17}/><span>{f.name}<small>{(f.size/1024/1024).toFixed(2)} MB</small></span><em>{f.status}</em><button className="batch-preview-button" onClick={()=>void openBatchPreview(f)} disabled={!f.storagePath || batchPreviewBusyId===f.id} title="Preview original paper">{batchPreviewBusyId===f.id?<span className="spin-inline"/>:<Eye size={14}/>}<span>{batchPreviewBusyId===f.id?'Loading':'Preview'}</span></button>{(f.status==='Completed'||f.status==='Needs review') && <button className="batch-review-button" onClick={()=>void openBatchReview(f)} disabled={batchReviewBusyId===f.id} title="Open assessment in Grade workspace">{batchReviewBusyId===f.id?<span className="spin-inline"/>:<ClipboardList size={14}/>}<span>{batchReviewBusyId===f.id?'Opening':'Open for Review'}</span></button>}<button className="icon-button" onClick={()=>deleteBatchFile(f.id)} title="Remove paper"><X size={15}/></button></div>)}<div className="notice"><InfoIcon/> Papers are processed one at a time. AI-extracted student details and marks are saved to your workspace; uncertain papers are flagged for review.</div><button className="primary-button batch-process" onClick={processBatch} disabled={batchBusy || !batchFiles.some(f => f.status === "Ready" || f.status === "Failed")}>{batchBusy ? <span className="spin-inline"/> : <Sparkles size={16}/>} {batchBusy ? "Processing papers…" : "Process batch with AI"}</button></>:<div className="empty-inline">No papers added yet. Choose several files to prepare a batch.</div>}</div></section>}
         {screen==='institutions' && <section className="screen-stack"><PageHeading eyebrow="TEAM WORKSPACES" title="Institutions" description="Create a shared institution workspace and give registered teachers access to its workbooks and results."/><div className="institution-grid"><div className="panel"><PanelTitle number="01" title="Create an institution" subtitle="The creator becomes the institution owner."/><div className="institution-create"><Field label="Institution name"><input value={institutionName} onChange={e=>setInstitutionName(e.target.value)} placeholder="e.g. Lilongwe Secondary School"/></Field><button className="primary-button" onClick={createInstitution} disabled={institutionBusy}><Plus size={15}/> Create institution</button></div><div className="divider"/><Field label="Select institution"><select value={activeInstitutionId} onChange={e=>setActiveInstitutionId(e.target.value)}><option value="">Choose an institution</option>{institutions.map(item=><option key={item.id} value={item.id}>{item.name}</option>)}</select></Field><p className="institution-hint">When you create a workbook, the selected institution is attached to it so its teachers can collaborate.</p></div><div className="panel"><PanelTitle number="02" title="Teacher access" subtitle="Add teachers who already have RedPen accounts."/><form className="institution-create" onSubmit={e=>{e.preventDefault();void addInstitutionMember();}}><Field label="Teacher email address"><input type="email" value={memberEmail} onChange={e=>setMemberEmail(e.target.value)} placeholder="teacher@school.edu"/></Field><button className="primary-button" type="submit" disabled={institutionBusy || !activeInstitutionId}><Users size={15}/> Add teacher</button></form><p className="institution-hint">Teachers must register for RedPen first. Only the institution owner or an administrator can manage membership.</p><div className="member-list">{members.map(member=><div className="member-row" key={member.id}><div className="member-avatar">{String(member.name || member.email || 'T').slice(0,1).toUpperCase()}</div><div><strong>{member.name || member.email || 'RedPen teacher'}</strong><small>{member.email} · {member.member_role}</small></div>{member.member_role!=='owner' && <button className="icon-button danger-quiet" onClick={()=>void removeInstitutionMember(member.id)} disabled={institutionBusy} title="Remove access"><Trash2 size={15}/></button>}</div>)}{activeInstitutionId && !members.length && <div className="empty-inline">No member list is available. You need to own this institution or be an administrator to manage its teachers.</div>}{!activeInstitutionId && <div className="empty-inline">Create or select an institution to manage its teachers.</div>}</div></div></div></section>}
         {screen==='settings' && <section className="screen-stack"><PageHeading eyebrow="PREFERENCES" title="Settings" description="Manage your secure RedPen cloud workspace."/><div className="settings-grid"><div className="panel"><PanelTitle number="01" title="Workspace storage" subtitle="Your records are synchronised to your private RedPen cloud workspace."/><div className="settings-row"><div><strong>Supabase cloud workspace</strong><p>Workbooks, courses and grading results are backed up to your private RedPen database.</p></div><span className="connection-pill"><span/> Active</span></div><div className="settings-row"><div><strong>Export your data</strong><p>Download a backup of your workbooks and grading records.</p></div><button className="secondary-button" onClick={()=>{const blob=new Blob([JSON.stringify({workbooks,results},null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='redpen-backup.json';a.click();URL.revokeObjectURL(a.href);}}>Export backup</button></div></div><div className="panel"><PanelTitle number="02" title="Integrations" subtitle="Core RedPen cloud services are connected."/><div className="integration-row"><div className="integration-icon"><Sparkles size={17}/></div><div><strong>AI grading provider</strong><p>Secure Edge Function deployed. Add AI_API_KEY, AI_PROVIDER and AI_MODEL in Supabase Edge Function Secrets to activate marking.</p></div><span className="status-pending">AWAITING SECRET</span></div><div className="integration-row"><div className="integration-icon"><Archive size={17}/></div><div><strong>Supabase authentication & storage</strong><p>Sign-in, cloud sync and private assessment-file storage are active.</p></div><span className="connection-pill"><span/> CONNECTED</span></div></div></div></section>}
       </div>
