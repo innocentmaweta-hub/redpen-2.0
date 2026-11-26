@@ -95,7 +95,7 @@ export default function AuthGate() {
         const { data, error: authError } = await supabase.auth.signUp({
           email: email.trim(),
           password,
-          options: { data: { full_name: fullName.trim() } },
+          options: { data: { full_name: fullName.trim() }, emailRedirectTo: window.location.origin },
         });
         if (authError) throw authError;
         if (!data.session) setNotice('Account created. Check your email for the confirmation link, then sign in.');
