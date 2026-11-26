@@ -1,0 +1,161 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import "tailwindcss";
+
+@theme {
+    --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+    --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+    --color-bg-dark: #0f1115;
+    --color-sidebar: #0d1117;
+    --color-card: #161a21;
+    --color-accent-blue: #2563eb;
+    --color-accent-green: #00FF00;
+    --color-ink: #e5e7eb;
+}
+
+@layer utilities {
+    .glass {
+        @apply bg-white/5 backdrop-blur-md border border-white/10;
+    }
+
+    .glass-hover {
+        @apply hover:bg-white/10 hover:border-white/20 transition-all duration-300;
+    }
+
+    .glow-blue {
+        box-shadow: 0 0 20px rgba(37, 99, 235, 0.15);
+    }
+
+    .glow-green {
+        box-shadow: 0 0 20px rgba(0, 255, 0, 0.15);
+    }
+
+    .ct-boxshadow {
+        border: 1px solid rgba(146, 63, 151, 0.8);
+        box-shadow:
+            0 0 0 1px rgba(146, 63, 151, 0.35),
+            0 4px 20px rgba(146, 63, 151, 0.25),
+            inset 0 0 12px rgba(255, 255, 255, 0.04);
+    }
+}
+
+/* Animated 2px Yaza AI boundary stroke.
+   The button stays fully visible; only the border pseudo-element animates. */
+@property --yaza-angle {
+    syntax: '<angle>';
+    initial-value: 0deg;
+    inherits: false;
+}
+
+@keyframes yaza-border-cycle {
+    0% {
+        --yaza-angle: 0deg;
+        opacity: 1;
+    }
+    25.53% {
+        --yaza-angle: 360deg;
+        opacity: 1;
+    }
+    25.54%,
+    100% {
+        --yaza-angle: 360deg;
+        opacity: 0;
+    }
+}
+
+body:not(:has(.fixed.top-10.right-4.bottom-4)) button:has(svg.lucide-bot) {
+    position: relative;
+    isolation: isolate;
+    border: 2px solid transparent;
+    background: #161a21;
+}
+
+body:not(:has(.fixed.top-10.right-4.bottom-4)) button:has(svg.lucide-bot)::before {
+    content: "";
+    position: absolute;
+    inset: -2px;
+    border-radius: inherit;
+    padding: 2px;
+    pointer-events: none;
+    z-index: -1;
+    background:
+        conic-gradient(
+            from var(--yaza-angle),
+            rgba(37, 99, 235, 0.12) 0deg,
+            rgba(37, 99, 235, 0.12) 285deg,
+            rgba(37, 99, 235, 0.28) 305deg,
+            rgba(37, 99, 235, 0.65) 325deg,
+            #ffffff 340deg,
+            #2563eb 348deg,
+            rgba(37, 99, 235, 0.12) 360deg
+        ) border-box;
+    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    animation: yaza-border-cycle 9.4s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    body:not(:has(.fixed.top-10.right-4.bottom-4)) button:has(svg.lucide-bot)::before {
+        animation: none;
+        opacity: 1;
+        background: #2563eb;
+        -webkit-mask: none;
+        mask: none;
+    }
+}
+
+@layer base {
+    body {
+        @apply bg-bg-dark text-ink font-sans antialiased;
+    }
+}
+
+.desktop-scroll::-webkit-scrollbar {
+    width: 8px;
+}
+
+.desktop-scroll::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.desktop-scroll::-webkit-scrollbar-thumb {
+    @apply bg-white/10 rounded-full;
+}
+
+.desktop-scroll::-webkit-scrollbar-thumb:hover {
+    @apply bg-white/20;
+}
+
+/* Custom scrollbars matching the app's dark theme */
+
+/* Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #374151 #18181b; /* thumb (gray-700) / track (near-black) */
+}
+
+/* Chrome, Edge, Safari (WebKit) */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: #374151; /* gray-700, matches your borders */
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: #4b5563; /* gray-600, slightly lighter on hover */
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
