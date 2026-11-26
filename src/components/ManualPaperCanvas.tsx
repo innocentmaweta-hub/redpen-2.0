@@ -23,6 +23,8 @@ export default function ManualPaperCanvas({ file, annotations, onChange }: Props
   const start = useRef<Point | null>(null);
   const pdfRef = useRef<any>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
+  const annotationsRef = useRef(annotations);
+  useEffect(() => { annotationsRef.current = annotations; }, [annotations]);
 
   const saveSnapshot = useCallback(() => {
     const canvas = inkRef.current;
@@ -66,7 +68,7 @@ export default function ManualPaperCanvas({ file, annotations, onChange }: Props
         context.drawImage(image, 0, 0, base.width, base.height);
       }
       context.imageSmoothingEnabled = true;
-      const saved = annotations[String(pageNumber)];
+      const saved = annotationsRef.current[String(pageNumber)];
       const inkContext = ink.getContext('2d');
       inkContext?.clearRect(0, 0, ink.width, ink.height);
       if (saved) {
@@ -79,7 +81,7 @@ export default function ManualPaperCanvas({ file, annotations, onChange }: Props
     } catch (error) {
       console.error('Could not render paper page:', error);
     } finally { setBusy(false); }
-  }, [annotations, zoom]);
+  }, [zoom]);
 
   useEffect(() => {
     let cancelled = false;
