@@ -47,3 +47,36 @@
 .annotation-content .paper-score-annotation:hover{background:#a91f1f;transform:translate(-50%,-50%) scale(1.08)}
 .annotation-content .canvas-marking-hint{margin:0;color:#e8b65e;font-size:11px}
 @media(max-width:760px){.annotation-content .canvas-marks-panel{align-items:flex-start;flex-direction:column;gap:7px}.annotation-content .canvas-maximum-field{width:100%;justify-content:space-between}.annotation-content .canvas-maximum-field input{width:110px}.annotation-content .paper-score-annotation{min-width:25px;min-height:25px;font-size:13px}}
+
+
+/* Compact Results controls share the heading row; the academic crown stays at the far right. */
+.results-page-heading{display:flex;align-items:center;gap:18px;width:100%}
+.results-heading-copy{flex:0 0 auto;min-width:175px}
+.results-heading-copy h1{font:800 27px Manrope,sans-serif;letter-spacing:-1px;margin:7px 0 5px;color:#f2f4f7}
+.results-heading-copy p{font-size:11px;color:#929dad;margin:0}
+.results-heading-controls{display:flex;align-items:flex-end;justify-content:flex-end;gap:9px;flex:1;min-width:0}
+.results-inline-filter{display:grid;gap:5px;min-width:125px;flex:1;max-width:190px}
+.results-inline-filter>span{font-size:8px;font-weight:700;letter-spacing:1px;color:#8793a2}
+.results-inline-filter select{width:100%;height:35px;min-width:0;padding:0 9px;border:1px solid #303a49;border-radius:7px;background:#10161f;color:#e8edf3;font-size:10px;outline:none}
+.results-inline-filter select:focus{border-color:#c38c3b}
+.results-inline-actions{display:flex;align-items:center;gap:7px;white-space:nowrap}
+.results-inline-actions .secondary-button{padding:9px 11px;font-size:10px}
+.results-inline-actions .text-action{margin:0;padding:8px 4px}
+.results-page-heading .heading-mark{flex:0 0 48px;margin-left:0}
+.results-selection-count{margin-top:-13px;color:#8793a2;font-size:9px;text-align:right}
+@media(max-width:1120px){
+ .results-page-heading{flex-wrap:wrap;align-items:flex-start}
+ .results-heading-controls{order:3;flex-basis:100%;justify-content:flex-start;flex-wrap:wrap}
+ .results-page-heading .heading-mark{margin-left:auto}
+ .results-inline-filter{max-width:none;flex:1 1 150px}
+}
+@media(max-width:620px){
+ .results-page-heading{gap:10px}
+ .results-heading-copy{min-width:0}
+ .results-heading-copy h1{font-size:24px}
+ .results-heading-controls{display:grid;grid-template-columns:1fr 1fr;gap:9px;width:100%}
+ .results-inline-filter{min-width:0}
+ .results-inline-actions{grid-column:1/-1;justify-content:flex-start;flex-wrap:wrap}
+ .results-inline-actions .secondary-button{flex:1}
+ .results-page-heading .heading-mark{width:42px;height:42px;flex-basis:42px}
+}
