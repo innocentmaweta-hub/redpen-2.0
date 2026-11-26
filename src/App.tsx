@@ -1,8 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import type { User } from '@supabase/supabase-js';
+import { supabase } from './lib/supabase';
 import {
   Activity, Archive, ArrowLeft, Award, BarChart3, BookOpen, Bot, Check, CheckCircle2,
   ChevronDown, ChevronRight, CircleHelp, ClipboardList, Clock3, FilePlus2, FileText,
-  FolderOpen, GraduationCap, LayoutDashboard, Menu, MessageSquare, MoreHorizontal,
+  FolderOpen, GraduationCap, LayoutDashboard, LogOut, Menu, MessageSquare, MoreHorizontal,
   PanelLeftClose, Plus, Printer, Save, Search, Settings, ShieldCheck, Sparkles, Trash2,
   Upload, Users, X, Zap
 } from 'lucide-react';
@@ -13,11 +15,11 @@ type Question = { id: string; label: string; max: number; score: number; feedbac
 type Course = { id: string; code: string; name: string; year: string; term: string; schemeName?: string };
 type Workbook = { id: string; name: string; institution: string; createdAt: string; courses: Course[] };
 type Student = { name: string; id: string; className: string };
-type Result = { id: string; student: Student; courseName: string; workbookName: string; date: string; questions: Question[]; total: number; maximum: number; percentage: number; grade: string; feedback: string; paperName: string; };
+type Result = { id: string; assessmentId?: string; schemePath?: string; paperPath?: string; student: Student; courseName: string; workbookName: string; date: string; questions: Question[]; total: number; maximum: number; percentage: number; grade: string; feedback: string; paperName: string; };
 type BatchFile = { id: string; name: string; size: number; status: 'Ready' | 'Needs review' };
 const STORE = 'redpen-2.0-workspace-v1';
-const uid = () => Math.random().toString(36).slice(2, 10);
-const starter: Workbook[] = [{ id: 'wb-demo', name: 'My First Workbook', institution: 'My Institution', createdAt: new Date().toISOString(), courses: [{ id: 'course-demo', code: 'BIO 101', name: 'Biology', year: '2026', term: 'Semester 1' }] }];
+const uid = () => crypto.randomUUID();
+const starter: Workbook[] = [];
 const grades = [{ min: 80, grade: 'A+' }, { min: 75, grade: 'A' }, { min: 70, grade: 'B+' }, { min: 65, grade: 'B' }, { min: 60, grade: 'C+' }, { min: 55, grade: 'C' }, { min: 50, grade: 'D' }, { min: 0, grade: 'F' }];
 function gradeFor(p: number) { return grades.find(g => p >= g.min)?.grade ?? 'F'; }
 function readStore(): { workbooks: Workbook[]; results: Result[] } {
@@ -25,7 +27,7 @@ function readStore(): { workbooks: Workbook[]; results: Result[] } {
   return { workbooks: starter, results: [] };
 }
 function formatDate(value: string) { return new Date(value).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }); }
-function App() {
+function App({ user }: { user: User }) {
   const initial = readStore();
   const [workbooks, setWorkbooks] = useState<Workbook[]>(initial.workbooks);
   const [results, setResults] = useState<Result[]>(initial.results);
@@ -52,7 +54,18 @@ function App() {
   const [toast, setToast] = useState('');
   const [mobileNav, setMobileNav] = useState(false);
 
-  useEffect(() => { localStorage.setItem(STORE, JSON.stringify({ workbooks, results })); }, [workbooks, results]);
+  useEffect(() => {
+    const snapshot = { workbooks, results };
+    localStorage.setItem(STORE, JSON.stringify(snapshot));
+    const timer = window.setTimeout(async () => {
+      const { error } = await supabase.from('workspace_snapshots').upsert(
+        { user_id: user.id, data: snapshot, updated_at: new Date().toISOString() },
+        { onConflict: 'user_id' }
+      );
+      if (error) console.error('RedPen cloud save failed:', error.message);
+    }, 650);
+    return () => window.clearTimeout(timer);
+  }, [workbooks, results, user.id]);
   useEffect(() => () => { if (paperUrl) URL.revokeObjectURL(paperUrl); }, [paperUrl]);
   useEffect(() => { if (!toast) return; const timer = window.setTimeout(() => setToast(''), 2800); return () => window.clearTimeout(timer); }, [toast]);
   const activeWorkbook = workbooks.find(w => w.id === activeWorkbookId) || null;
@@ -64,20 +77,106 @@ function App() {
   const navigate = (next: Screen) => { setScreen(next); setMobileNav(false); };
   const startGrading = () => { setStudent({ name: '', id: '', className: '' }); setScheme(null); setPaper(null); setPaperUrl(''); setQuestions([{ id: uid(), label: 'Question 1', max: 10, score: 0, feedback: '' }]); setOverallFeedback(''); navigate('grade'); };
   const onPaper = (file?: File) => { if (!file) return; if (file.size > 25 * 1024 * 1024) { setToast('Please choose a file smaller than 25 MB.'); return; } setPaper(file); if (paperUrl) URL.revokeObjectURL(paperUrl); setPaperUrl(URL.createObjectURL(file)); };
-  const saveResult = () => {
+  const saveResult = async () => {
     if (!student.name.trim()) { setToast('Enter the student name before saving.'); return; }
     if (!activeCourse) { setToast('Create or select a course first.'); return; }
     if (!questions.length || totalMarks <= 0) { setToast('Add at least one question with a maximum mark.'); return; }
     if (questions.some(q => q.score < 0 || q.score > q.max || q.max <= 0)) { setToast('Check the question scores: each score must be within its maximum.'); return; }
-    const result: Result = { id: uid(), student: { ...student }, courseName: activeCourse.name, workbookName: activeWorkbook?.name || '', date: new Date().toISOString(), questions: questions.map(q => ({ ...q })), total: earnedMarks, maximum: totalMarks, percentage, grade: gradeFor(percentage), feedback: overallFeedback, paperName: paper?.name || '' };
-    setResults(current => [result, ...current]); setToast('Grading result saved to History.'); navigate('results');
+    const assessmentId = uid();
+    const uploadedPaths: string[] = [];
+    const uploadAssessmentFile = async (file: File | null, kind: 'scheme' | 'paper') => {
+      if (!file) return null;
+      const extension = file.name.split('.').pop()?.toLowerCase().replace(/[^a-z0-9]/g, '') || 'file';
+      const path = `${user.id}/${assessmentId}/${kind}-${uid()}.${extension}`;
+      const { error } = await supabase.storage.from('redpen-assessment-files').upload(path, file, {
+        contentType: file.type || 'application/octet-stream',
+        upsert: false,
+      });
+      if (error) throw error;
+      uploadedPaths.push(path);
+      return path;
+    };
+    try {
+      const schemePath = await uploadAssessmentFile(scheme, 'scheme');
+      const paperPath = await uploadAssessmentFile(paper, 'paper');
+      const { data: studentRow, error: studentError } = await supabase.from('students').insert({
+        owner_id: user.id, full_name: student.name.trim(),
+        student_number: student.id.trim() || null, class_name: student.className.trim() || null,
+      }).select('id').single();
+      if (studentError) throw studentError;
+      const { error: assessmentError } = await supabase.from('assessments').insert({
+        id: assessmentId, owner_id: user.id, workbook_id: activeWorkbook?.id || null,
+        course_id: activeCourse.id, student_id: studentRow.id,
+        marking_scheme_path: schemePath, answer_paper_path: paperPath,
+        paper_filename: paper?.name || null, status: 'completed',
+      });
+      if (assessmentError) {
+        await supabase.from('students').delete().eq('id', studentRow.id);
+        throw assessmentError;
+      }
+      const { error: resultError } = await supabase.from('grading_results').insert({
+        owner_id: user.id, assessment_id: assessmentId, score: earnedMarks,
+        maximum_score: totalMarks, percentage, grade: gradeFor(percentage),
+        feedback: overallFeedback, question_scores: questions.map(q => ({ ...q })),
+      });
+      if (resultError) {
+        await supabase.from('assessments').delete().eq('id', assessmentId);
+        await supabase.from('students').delete().eq('id', studentRow.id);
+        throw resultError;
+      }
+      const result: Result = {
+        id: assessmentId, assessmentId, schemePath: schemePath || undefined, paperPath: paperPath || undefined,
+        student: { ...student }, courseName: activeCourse.name, workbookName: activeWorkbook?.name || '',
+        date: new Date().toISOString(), questions: questions.map(q => ({ ...q })), total: earnedMarks,
+        maximum: totalMarks, percentage, grade: gradeFor(percentage), feedback: overallFeedback,
+        paperName: paper?.name || '',
+      };
+      setResults(current => [result, ...current]);
+      setToast('Grading result saved securely to your RedPen cloud workspace.');
+      navigate('results');
+    } catch (cause) {
+      if (uploadedPaths.length) await supabase.storage.from('redpen-assessment-files').remove(uploadedPaths);
+      setToast(cause instanceof Error ? `Could not save assessment: ${cause.message}` : 'Could not save assessment. Please try again.');
+    }
   };
-  const addWorkbook = () => { if (!workbookName.trim()) return; const w: Workbook = { id: uid(), name: workbookName.trim(), institution: institution.trim(), createdAt: new Date().toISOString(), courses: [] }; setWorkbooks(current => [...current, w]); setActiveWorkbookId(w.id); setActiveCourseId(''); setWorkbookName(''); setInstitution(''); setModal(null); setToast('Workbook created. Add a course to begin grading.'); };
-  const addCourse = () => { if (!activeWorkbook || !courseName.trim()) return; const c: Course = { id: uid(), code: courseCode.trim(), name: courseName.trim(), year: String(new Date().getFullYear()), term: 'Semester 1' }; setWorkbooks(current => current.map(w => w.id === activeWorkbook.id ? { ...w, courses: [...w.courses, c] } : w)); setActiveCourseId(c.id); setCourseCode(''); setCourseName(''); setModal(null); setToast('Course added to workbook.'); };
+  const addWorkbook = async () => {
+    if (!workbookName.trim()) return;
+    const { data, error } = await supabase.from('workbooks').insert({
+      owner_id: user.id, name: workbookName.trim(), institution_name: institution.trim() || null,
+    }).select('id,created_at').single();
+    if (error) { setToast(`Could not create workbook: ${error.message}`); return; }
+    const w: Workbook = { id: data.id, name: workbookName.trim(), institution: institution.trim(), createdAt: data.created_at, courses: [] };
+    setWorkbooks(current => [...current, w]); setActiveWorkbookId(w.id); setActiveCourseId('');
+    setWorkbookName(''); setInstitution(''); setModal(null); setToast('Workbook created in your cloud workspace.');
+  };
+  const addCourse = async () => {
+    if (!activeWorkbook || !courseName.trim()) return;
+    const year = String(new Date().getFullYear());
+    const { data, error } = await supabase.from('courses').insert({
+      owner_id: user.id, workbook_id: activeWorkbook.id, code: courseCode.trim(),
+      name: courseName.trim(), academic_year: year, term: 'Semester 1',
+    }).select('id').single();
+    if (error) { setToast(`Could not add course: ${error.message}`); return; }
+    const c: Course = { id: data.id, code: courseCode.trim(), name: courseName.trim(), year, term: 'Semester 1' };
+    setWorkbooks(current => current.map(w => w.id === activeWorkbook.id ? { ...w, courses: [...w.courses, c] } : w));
+    setActiveCourseId(c.id); setCourseCode(''); setCourseName(''); setModal(null); setToast('Course saved to your cloud workspace.');
+  };
   const addQuestion = () => setQuestions(current => [...current, { id: uid(), label: `Question ${current.length + 1}`, max: 10, score: 0, feedback: '' }]);
   const updateQuestion = (id: string, patch: Partial<Question>) => setQuestions(current => current.map(q => q.id === id ? { ...q, ...patch } : q));
   const sendYaza = () => { const value = yazaInput.trim(); if (!value) return; setYazaMessages(m => [...m, { role:'user', text:value }, { role:'assistant', text:'I can currently guide you through the RedPen screens and workflow. Automated marking requires an AI grading provider to be connected; I will not invent marks or claim to have assessed a paper.' }]); setYazaInput(''); };
   const addBatch = (files: FileList | null) => { if (!files) return; setBatchFiles(current => [...current, ...Array.from(files).map(f => ({ id: uid(), name: f.name, size: f.size, status: 'Ready' as const }))]); };
+  const deleteResult = async (id: string) => {
+    const row = results.find(item => item.id === id);
+    if (row?.assessmentId) {
+      const { error } = await supabase.from('assessments').delete().eq('id', row.assessmentId);
+      if (error) { setToast(`Could not delete result: ${error.message}`); return; }
+      const paths = [row.schemePath, row.paperPath].filter((path): path is string => Boolean(path));
+      if (paths.length) await supabase.storage.from('redpen-assessment-files').remove(paths);
+    }
+    setResults(current => current.filter(item => item.id !== id));
+    setToast('Grading record deleted.');
+  };
+
   const nav = [{ id:'dashboard' as Screen, label:'Dashboard', icon:LayoutDashboard }, { id:'grade' as Screen, label:'Grade', icon:ClipboardList }, { id:'results' as Screen, label:'Results', icon:FileText }, { id:'history' as Screen, label:'History', icon:Clock3 }, { id:'batch' as Screen, label:'Batch grading', icon:LayersIcon }, { id:'settings' as Screen, label:'Settings', icon:Settings }];
   const title = nav.find(n => n.id === screen)?.label || 'Dashboard';
 
@@ -87,11 +186,11 @@ function App() {
       <div className="mode-switch"><span>MARKING MODE</span><div><button className={mode==='ai'?'selected':''} onClick={() => { setMode('ai'); setToast('AI grading is not connected yet. Manual marking remains available.'); }}> <Sparkles size={14}/> AI</button><button className={mode==='manual'?'selected':''} onClick={() => setMode('manual')}><FileText size={14}/> Manual</button></div></div>
       <div className="nav-label">WORKSPACE</div>
       <nav>{nav.map(item => <button key={item.id} className={screen===item.id?'nav-item active':'nav-item'} onClick={() => navigate(item.id)}><item.icon size={18}/><span>{item.label}</span>{item.id==='results' && results.length>0 && <small>{results.length}</small>}</button>)}</nav>
-      <div className="sidebar-bottom"><div className="help-card"><div className="help-icon"><CircleHelp size={17}/></div><strong>Need a hand?</strong><p>Ask Yaza for help using RedPen.</p><button onClick={() => setYazaOpen(true)}>Ask Yaza <ChevronRight size={14}/></button></div><div className="user-row"><div className="avatar">RM</div><div><strong>RedPen workspace</strong><small>Local workspace</small></div><MoreHorizontal size={17}/></div></div>
+      <div className="sidebar-bottom"><div className="help-card"><div className="help-icon"><CircleHelp size={17}/></div><strong>Need a hand?</strong><p>Ask Yaza for help using RedPen.</p><button onClick={() => setYazaOpen(true)}>Ask Yaza <ChevronRight size={14}/></button></div><div className="user-row"><div className="avatar">{(user.email || 'RP').slice(0,2).toUpperCase()}</div><div><strong>{user.email || 'RedPen account'}</strong><small>Cloud workspace</small></div><MoreHorizontal size={17}/></div></div>
     </aside>
     {mobileNav && <button className="mobile-scrim" onClick={() => setMobileNav(false)} aria-label="Close navigation"/>}
     <main className="main-area">
-      <header className="topbar"><div className="topbar-left"><button className="icon-button mobile-menu" onClick={() => setMobileNav(true)}><Menu size={19}/></button><div className="crumb"><span>Workspace</span><ChevronRight size={14}/><strong>{title}</strong></div></div><div className="topbar-actions"><label className="search-box"><Search size={15}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search students, results..."/><kbd>⌘ K</kbd></label><button className="icon-button" onClick={() => setYazaOpen(true)} title="Yaza AI"><Bot size={18}/></button><button className="icon-button" onClick={() => navigate('settings')} title="Settings"><Settings size={18}/></button></div></header>
+      <header className="topbar"><div className="topbar-left"><button className="icon-button mobile-menu" onClick={() => setMobileNav(true)}><Menu size={19}/></button><div className="crumb"><span>Workspace</span><ChevronRight size={14}/><strong>{title}</strong></div></div><div className="topbar-actions"><label className="search-box"><Search size={15}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search students, results..."/><kbd>⌘ K</kbd></label><button className="icon-button" onClick={() => setYazaOpen(true)} title="Yaza AI"><Bot size={18}/></button><button className="icon-button" onClick={() => navigate('settings')} title="Settings"><Settings size={18}/></button><button className="icon-button" onClick={() => { void supabase.auth.signOut(); }} title="Sign out"><LogOut size={18}/></button></div></header>
       <div className="page-content">
         {screen==='dashboard' && <Dashboard workbooks={workbooks} results={results} activeWorkbook={activeWorkbook} activeCourse={activeCourse} onStart={startGrading} onNewWorkbook={() => setModal('workbook')} onNewCourse={() => setModal('course')} onNavigate={navigate} onSelectWorkbook={id => { setActiveWorkbookId(id); const c=workbooks.find(w=>w.id===id)?.courses[0]; setActiveCourseId(c?.id||''); }}/>}
         {screen==='grade' && <section className="screen-stack"><PageHeading eyebrow="MARKING WORKSPACE" title="Grade a paper" description="Set up the assessment, review the student's paper and record marks."/><div className="context-strip"><div><BookOpen size={16}/><span>{activeWorkbook?.name || 'No workbook selected'}</span><ChevronDown size={13}/></div><span className="strip-dot"/><span>{activeCourse ? activeCourse.code+' · '+activeCourse.name : 'No course selected'}</span><button onClick={() => setModal(activeWorkbook?'course':'workbook')}>{activeWorkbook?'Add course':'Create workbook'}</button></div>
@@ -101,10 +200,10 @@ function App() {
           <div className="panel"><PanelTitle number="04" title="Overall feedback" subtitle="Add a summary comment for the student (optional)."/><textarea className="textarea" rows={3} value={overallFeedback} onChange={e=>setOverallFeedback(e.target.value)} placeholder="Write constructive feedback..."/></div>
           <div className="grade-footer"><div className="score-preview"><span>LIVE TOTAL</span><strong>{earnedMarks} <small>/ {totalMarks}</small></strong><em>{percentage}% · {gradeFor(percentage)}</em></div><button className="primary-button" onClick={saveResult}><Save size={16}/> Save grading result</button></div>
           </div><aside className="grade-aside"><div className="panel preview-panel"><div className="aside-title"><span>STUDENT PAPER</span><span className={paper?'status-ready':'status-pending'}>{paper?'UPLOADED':'AWAITING FILE'}</span></div>{paperUrl && paper?.type.startsWith('image/')?<img className="paper-image" src={paperUrl} alt="Student paper preview"/>:paperUrl && paper?.type==='application/pdf'?<iframe className="paper-frame" src={paperUrl} title="Student paper preview"/>:<div className="paper-empty"><FileText size={34}/><strong>No paper uploaded</strong><span>Upload a PDF or image to preview it here.</span></div>}{paper && <div className="file-meta"><FileText size={14}/><span>{paper.name}</span></div>}</div><div className="panel scheme-summary"><div className="aside-title">MARKING SCHEME</div>{scheme?<div className="file-meta"><CheckCircle2 size={15}/><span>{scheme.name}</span></div>:<p>No marking scheme uploaded yet.</p>}<div className="divider"/><div className="summary-line"><span>Questions</span><strong>{questions.length}</strong></div><div className="summary-line"><span>Total possible marks</span><strong>{totalMarks}</strong></div></div><div className="ai-note"><Sparkles size={17}/><div><strong>AI-assisted marking</strong><p>AI marking will be enabled when a grading provider and assessment workflow are configured.</p></div></div></aside></div></section>}
-        {screen==='results' && <section className="screen-stack"><PageHeading eyebrow="ASSESSMENT OUTPUT" title="Results" description="Review saved student assessments and their final scores."/><div className="metric-grid compact"><Metric icon={Users} label="Students assessed" value={results.length}/><Metric icon={BarChart3} label="Average score" value={results.length?Math.round(results.reduce((s,r)=>s+r.percentage,0)/results.length)+'%':'—'}/><Metric icon={Award} label="Pass rate" value={results.length?Math.round(results.filter(r=>r.percentage>=50).length/results.length*100)+'%':'—'}/></div><ResultsTable rows={filteredResults} onDelete={id=>setResults(r=>r.filter(x=>x.id!==id))}/></section>}
-        {screen==='history' && <section className="screen-stack"><PageHeading eyebrow="YOUR WORK" title="Grading history" description="Find previous assessments and continue reviewing their records."/><ResultsTable rows={filteredResults} onDelete={id=>setResults(r=>r.filter(x=>x.id!==id))} history/></section>}
+        {screen==='results' && <section className="screen-stack"><PageHeading eyebrow="ASSESSMENT OUTPUT" title="Results" description="Review saved student assessments and their final scores."/><div className="metric-grid compact"><Metric icon={Users} label="Students assessed" value={results.length}/><Metric icon={BarChart3} label="Average score" value={results.length?Math.round(results.reduce((s,r)=>s+r.percentage,0)/results.length)+'%':'—'}/><Metric icon={Award} label="Pass rate" value={results.length?Math.round(results.filter(r=>r.percentage>=50).length/results.length*100)+'%':'—'}/></div><ResultsTable rows={filteredResults} onDelete={deleteResult}/></section>}
+        {screen==='history' && <section className="screen-stack"><PageHeading eyebrow="YOUR WORK" title="Grading history" description="Find previous assessments and continue reviewing their records."/><ResultsTable rows={filteredResults} onDelete={deleteResult} history/></section>}
         {screen==='batch' && <section className="screen-stack"><PageHeading eyebrow="MULTIPLE PAPERS" title="Batch grading" description="Prepare a group of student papers for assessment."/><div className="panel batch-panel"><label className="batch-drop"><input type="file" multiple accept=".pdf,image/*" onChange={e=>addBatch(e.target.files)}/><div className="upload-circle"><Upload size={22}/></div><strong>Drop student papers here</strong><span>or browse files · PDF and images · 25 MB per file</span></label>{batchFiles.length>0?<><div className="batch-head"><strong>{batchFiles.length} files added</strong><button className="text-action danger-text" onClick={()=>setBatchFiles([])}>Remove all</button></div>{batchFiles.map(f=><div className="batch-file" key={f.id}><FileText size={17}/><span>{f.name}<small>{(f.size/1024/1024).toFixed(2)} MB</small></span><em>{f.status}</em><button className="icon-button" onClick={()=>setBatchFiles(list=>list.filter(x=>x.id!==f.id))}><X size={15}/></button></div>)}<div className="notice"><InfoIcon/> Batch queue is prepared. Automated processing and student-to-paper matching require the grading engine integration.</div></>:<div className="empty-inline">No papers added yet. Choose several files to prepare a batch.</div>}</div></section>}
-        {screen==='settings' && <section className="screen-stack"><PageHeading eyebrow="PREFERENCES" title="Settings" description="Manage this browser's local RedPen workspace."/><div className="settings-grid"><div className="panel"><PanelTitle number="01" title="Workspace storage" subtitle="Your current records are saved in this browser."/><div className="settings-row"><div><strong>Local workspace</strong><p>Workbooks and saved results are stored in this browser using local storage.</p></div><span className="connection-pill"><span/> Active</span></div><div className="settings-row"><div><strong>Export your data</strong><p>Download a backup of your workbooks and grading records.</p></div><button className="secondary-button" onClick={()=>{const blob=new Blob([JSON.stringify({workbooks,results},null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='redpen-backup.json';a.click();URL.revokeObjectURL(a.href);}}>Export backup</button></div></div><div className="panel"><PanelTitle number="02" title="Integrations" subtitle="External services are not connected in this clean rebuild."/><div className="integration-row"><div className="integration-icon"><Sparkles size={17}/></div><div><strong>AI grading provider</strong><p>Not configured · no AI marks will be generated.</p></div><span className="status-pending">NOT CONNECTED</span></div><div className="integration-row"><div className="integration-icon"><Archive size={17}/></div><div><strong>Cloud storage / accounts</strong><p>Authentication and cloud sync are planned integration points.</p></div><span className="status-pending">NOT CONNECTED</span></div></div></div></section>}
+        {screen==='settings' && <section className="screen-stack"><PageHeading eyebrow="PREFERENCES" title="Settings" description="Manage your secure RedPen cloud workspace."/><div className="settings-grid"><div className="panel"><PanelTitle number="01" title="Workspace storage" subtitle="Your records are synchronised to your private RedPen cloud workspace."/><div className="settings-row"><div><strong>Supabase cloud workspace</strong><p>Workbooks, courses and grading results are backed up to your private RedPen database.</p></div><span className="connection-pill"><span/> Active</span></div><div className="settings-row"><div><strong>Export your data</strong><p>Download a backup of your workbooks and grading records.</p></div><button className="secondary-button" onClick={()=>{const blob=new Blob([JSON.stringify({workbooks,results},null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='redpen-backup.json';a.click();URL.revokeObjectURL(a.href);}}>Export backup</button></div></div><div className="panel"><PanelTitle number="02" title="Integrations" subtitle="Core RedPen cloud services are connected."/><div className="integration-row"><div className="integration-icon"><Sparkles size={17}/></div><div><strong>AI grading provider</strong><p>Not configured · no AI marks will be generated.</p></div><span className="status-pending">NOT CONNECTED</span></div><div className="integration-row"><div className="integration-icon"><Archive size={17}/></div><div><strong>Supabase authentication & storage</strong><p>Sign-in, cloud sync and private assessment-file storage are active.</p></div><span className="connection-pill"><span/> CONNECTED</span></div></div></div></section>}
       </div>
     </main>
     {yazaOpen && <div className="yaza-panel"><div className="yaza-head"><div className="yaza-brand"><div><Bot size={18}/></div><span><strong>Yaza AI</strong><small>RedPen guide</small></span></div><button className="icon-button" onClick={()=>setYazaOpen(false)}><X size={18}/></button></div><div className="yaza-messages">{yazaMessages.map((m,i)=><div key={i} className={m.role==='user'?'yaza-message user-message':'yaza-message'}>{m.text}</div>)}</div><form className="yaza-compose" onSubmit={e=>{e.preventDefault();sendYaza();}}><input value={yazaInput} onChange={e=>setYazaInput(e.target.value)} placeholder="Ask about using RedPen..."/><button className="primary-button" type="submit"><ChevronRight size={17}/></button></form></div>}
