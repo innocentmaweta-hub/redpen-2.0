@@ -417,6 +417,41 @@ function App({ user }: { user: User }) {
           case 'navigate_screen':
             if (['dashboard','grade','results','history','batch','institutions','settings'].includes(args.screen)) { navigate(args.screen); outcomes.push('Opened ' + args.screen + '.'); }
             break;
+          case 'create_workbook': {
+            const name = String(args.workbook_name || '').trim();
+            if (name) {
+              const requestedInstitution = institutions.find(item => item.name.toLowerCase() === String(args.institution_name || '').trim().toLowerCase());
+              const selectedInstitution = requestedInstitution || institutions.find(item => item.id === activeInstitutionId);
+              const { data: workbookRow, error: workbookError } = await supabase.from('workbooks').insert({
+                owner_id: user.id, name, institution_id: selectedInstitution?.id || null,
+                institution_name: selectedInstitution?.name || null,
+              }).select('id,created_at').single();
+              if (workbookError) outcomes.push('Could not create workbook: ' + workbookError.message);
+              else {
+                const created: Workbook = { id: workbookRow.id, name, institution: selectedInstitution?.name || '', createdAt: workbookRow.created_at, courses: [] };
+                setWorkbooks(current => [...current, created]); setActiveWorkbookId(created.id); setActiveCourseId('');
+                outcomes.push('Created workbook ' + name + '.');
+              }
+            }
+            break;
+          }
+          case 'create_course': {
+            const name = String(args.course_name || '').trim();
+            if (!activeWorkbook || !name) { outcomes.push('Select a workbook before creating a course.'); break; }
+            const code = String(args.course_code || '').trim();
+            const year = String(new Date().getFullYear());
+            const { data: courseRow, error: courseError } = await supabase.from('courses').insert({
+              owner_id: user.id, workbook_id: activeWorkbook.id, code, name,
+              academic_year: year, term: 'Semester 1',
+            }).select('id').single();
+            if (courseError) outcomes.push('Could not create course: ' + courseError.message);
+            else {
+              const created: Course = { id: courseRow.id, code, name, year, term: 'Semester 1' };
+              setWorkbooks(current => current.map(w => w.id === activeWorkbook.id ? { ...w, courses: [...w.courses, created] } : w));
+              setActiveCourseId(created.id); outcomes.push('Added course ' + name + ' to ' + activeWorkbook.name + '.');
+            }
+            break;
+          }
           case 'update_student_fields':
             setStudent(current => ({ name: args.name ?? current.name, id: args.student_id ?? current.id, className: args.class_name ?? current.className }));
             outcomes.push('Updated the student information form.');
