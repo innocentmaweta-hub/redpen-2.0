@@ -198,7 +198,7 @@ function App({ user }: { user: User }) {
   const percentage = totalMarks ? Math.round(earnedMarks / totalMarks * 1000) / 10 : 0;
   const filteredResults = useMemo(() => results.filter(r => [r.student.name, r.student.id, r.courseName, r.grade].join(' ').toLowerCase().includes(search.toLowerCase())), [results, search]);
   const navigate = (next: Screen) => { setScreen(next); setMobileNav(false); };
-  const startGrading = () => { setStudent({ name: '', id: '', className: '' }); setScheme(null); setNoScheme(false); setPaper(null); setPaperUrl(''); setQuestions([{ id: uid(), label: 'Question 1', max: 10, score: 0, feedback: '' }]); setOverallFeedback(''); setMode('manual'); setAiGradingMeta(null); navigate('grade'); };
+  const startGrading = () => { setReviewContext(null); setStudent({ name: '', id: '', className: '' }); setScheme(null); setNoScheme(false); setPaper(null); setPaperUrl(''); setQuestions([{ id: uid(), label: 'Question 1', max: 10, score: 0, feedback: '' }]); setOverallFeedback(''); setMode('manual'); setAiGradingMeta(null); navigate('grade'); };
   const onPaper = (file?: File) => { if (!file) return; if (file.size > 25 * 1024 * 1024) { setToast('Please choose a file smaller than 25 MB.'); return; } setPaper(file); if (paperUrl) URL.revokeObjectURL(paperUrl); setPaperUrl(URL.createObjectURL(file)); };
   const runAiGrading = async (schemeFile = (noScheme ? null : scheme), paperFile = paper) => {
     if ((!schemeFile && !noScheme) || !paperFile) { setToast('Choose a marking scheme or select No marking scheme, then upload the student paper.'); return null; }
@@ -262,6 +262,7 @@ function App({ user }: { user: User }) {
           feedback: overallFeedback, paperName: paper?.name || '',
         };
         setResults(current => current.map(item => item.assessmentId === reviewContext.assessmentId ? revised : item));
+        setBatchFiles(current => current.map(item => item.storagePath === reviewContext.paperPath ? { ...item, status: 'Completed' } : item));
         setReviewContext(null);
         setToast('Review saved. The existing batch assessment has been updated and approved.');
         navigate('results');
