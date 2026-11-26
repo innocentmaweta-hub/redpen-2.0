@@ -266,19 +266,24 @@ function App({ user }: { user: User }) {
   const sendYaza = () => { const value = yazaInput.trim(); if (!value) return; setYazaMessages(m => [...m, { role:'user', text:value }, { role:'assistant', text:'I can currently guide you through the RedPen screens and workflow. Automated marking requires an AI grading provider to be connected; I will not invent marks or claim to have assessed a paper.' }]); setYazaInput(''); };
   const addBatch = async (files: FileList | null) => {
     if (!files?.length) return;
+    if (!batchScheme) { setToast('Upload the marking scheme for this batch before adding papers.'); return; }
     const selected = Array.from(files);
+    const jobId = uid();
+    const schemeExtension = batchScheme.name.split('.').pop()?.toLowerCase().replace(/[^a-z0-9]/g, '') || 'pdf';
+    const schemePath = user.id + '/batch/' + jobId + '/scheme-' + uid() + '.' + schemeExtension;
+    const { error: schemeUploadError } = await supabase.storage.from('redpen-assessment-files').upload(schemePath, batchScheme, { contentType: batchScheme.type || 'application/octet-stream' });
+    if (schemeUploadError) { setToast('Could not upload batch marking scheme: ' + schemeUploadError.message); return; }
     const { data: job, error: jobError } = await supabase.from('batch_jobs').insert({
-      owner_id: user.id, workbook_id: activeWorkbook?.id || null,
-      course_id: activeCourse?.id || null, status: 'queued', total_files: selected.length,
+      id: jobId, owner_id: user.id, workbook_id: activeWorkbook?.id || null,
+      course_id: activeCourse?.id || null, marking_scheme_path: schemePath,
+      status: 'queued', total_files: selected.length,
     }).select('id').single();
-    if (jobError) { setToast(`Could not create batch: ${jobError.message}`); return; }
+    if (jobError) { await supabase.storage.from('redpen-assessment-files').remove([schemePath]); setToast('Could not create batch: ' + jobError.message); return; }
     const uploaded: BatchFile[] = [];
     for (const file of selected) {
       const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
-      const path = `${user.id}/batch/${job.id}/${uid()}-${safeName}`;
-      const { error: uploadError } = await supabase.storage.from('redpen-assessment-files').upload(path, file, {
-        contentType: file.type || 'application/octet-stream', upsert: false,
-      });
+      const path = user.id + '/batch/' + job.id + '/' + uid() + '-' + safeName;
+      const { error: uploadError } = await supabase.storage.from('redpen-assessment-files').upload(path, file, { contentType: file.type || 'application/octet-stream', upsert: false });
       if (uploadError) { console.error('Batch file upload failed:', uploadError.message); continue; }
       const { data: fileRow, error: rowError } = await supabase.from('batch_job_files').insert({
         owner_id: user.id, batch_job_id: job.id, storage_path: path,
@@ -294,10 +299,113 @@ function App({ user }: { user: User }) {
     if (uploaded.length) {
       await supabase.from('batch_jobs').update({ total_files: uploaded.length }).eq('id', job.id);
       setBatchFiles(current => [...current, ...uploaded]);
-      setToast(`${uploaded.length} paper(s) uploaded securely to your batch queue.`);
+      setToast(uploaded.length + ' paper(s) uploaded securely. Select Process batch to start AI marking.');
     } else {
       await supabase.from('batch_jobs').delete().eq('id', job.id);
+      await supabase.storage.from('redpen-assessment-files').remove([schemePath]);
       setToast('No papers could be uploaded. Check the file type and try again.');
+    }
+  };
+  const processBatch = async () => {
+    if (!batchFiles.length) return;
+    if (!activeCourse) { setToast('Select or create a course before processing this batch.'); return; }
+    const jobs = [...new Set(batchFiles.map(file => file.batchJobId).filter((id): id is string => Boolean(id)))];
+    if (!jobs.length) { setToast('No valid batch jobs were found.'); return; }
+    setBatchBusy(true);
+    let completed = 0;
+    let needsReview = 0;
+    try {
+      for (const jobId of jobs) {
+        const { data: job, error: jobError } = await supabase.from('batch_jobs').select('id,workbook_id,course_id,marking_scheme_path').eq('id', jobId).single();
+        if (jobError || !job?.marking_scheme_path) { needsReview++; continue; }
+        const { data: schemeBlob, error: schemeDownloadError } = await supabase.storage.from('redpen-assessment-files').download(job.marking_scheme_path);
+        if (schemeDownloadError || !schemeBlob) { needsReview++; continue; }
+        const schemeFile = new File([schemeBlob], job.marking_scheme_path.split('/').pop() || 'marking-scheme.pdf', { type: schemeBlob.type || 'application/pdf' });
+        const schemeDoc = await extractDocument(schemeFile);
+        const pending = batchFiles.filter(file => file.batchJobId === jobId && file.status !== 'Completed' && file.status !== 'Processing');
+        await supabase.from('batch_jobs').update({ status: 'processing' }).eq('id', jobId);
+        let jobCompleted = 0;
+        for (const file of pending) {
+          setBatchFiles(current => current.map(item => item.id === file.id ? { ...item, status: 'Processing' } : item));
+          await supabase.from('batch_job_files').update({ status: 'processing', error_message: null }).eq('id', file.id);
+          try {
+            if (!file.storagePath) throw new Error('Paper file path is missing.');
+            const { data: paperBlob, error: paperDownloadError } = await supabase.storage.from('redpen-assessment-files').download(file.storagePath);
+            if (paperDownloadError || !paperBlob) throw paperDownloadError || new Error('Could not download paper.');
+            const paperFile = new File([paperBlob], file.name, { type: paperBlob.type || (file.name.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'image/jpeg') });
+            const paperDoc = await extractDocument(paperFile);
+            const { data: graded, error: gradeError } = await supabase.functions.invoke('ai-grade', {
+              body: { schemeText: schemeDoc.text, schemeImages: schemeDoc.images, paperText: paperDoc.text, paperImages: paperDoc.images },
+            });
+            if (gradeError || graded?.error) throw new Error(graded?.error || gradeError?.message || 'AI grading failed.');
+            const questions: Question[] = (graded.questions || []).map((q: any, i: number) => ({
+              id: q.id || uid(), label: String(q.label || ('Question ' + (i + 1))),
+              max: Number(q.max), score: Number(q.score), feedback: String(q.feedback || ''),
+            }));
+            if (!questions.length || questions.some(q => !Number.isFinite(q.max) || q.max <= 0 || !Number.isFinite(q.score) || q.score < 0 || q.score > q.max)) {
+              throw new Error('AI returned invalid marks; paper needs manual review.');
+            }
+            const total = questions.reduce((sum, q) => sum + q.score, 0);
+            const maximum = questions.reduce((sum, q) => sum + q.max, 0);
+            const percent = maximum ? Math.round(total / maximum * 1000) / 10 : 0;
+            const studentData = graded.student || {};
+            const studentName = studentData.name || file.name.replace(/\.[^.]+$/, '');
+            const { data: studentRow, error: studentError } = await supabase.from('students').insert({
+              owner_id: user.id, full_name: studentName, student_number: studentData.id || null, class_name: studentData.className || null,
+            }).select('id').single();
+            if (studentError) throw studentError;
+            const assessmentId = uid();
+            const { error: assessmentError } = await supabase.from('assessments').insert({
+              id: assessmentId, owner_id: user.id, workbook_id: job.workbook_id,
+              course_id: job.course_id || activeCourse.id, student_id: studentRow.id,
+              marking_scheme_path: job.marking_scheme_path, answer_paper_path: file.storagePath,
+              paper_filename: file.name, status: graded.needsReview ? 'needs_review' : 'completed',
+            });
+            if (assessmentError) { await supabase.from('students').delete().eq('id', studentRow.id); throw assessmentError; }
+            const { error: resultError } = await supabase.from('grading_results').insert({
+              owner_id: user.id, assessment_id: assessmentId, score: total, maximum_score: maximum,
+              percentage: percent, grade: gradeFor(percent), feedback: graded.overallFeedback || '',
+              question_scores: questions,
+            });
+            if (resultError) { await supabase.from('assessments').delete().eq('id', assessmentId); throw resultError; }
+            await supabase.from('ai_grading_runs').insert({
+              owner_id: user.id, assessment_id: assessmentId, batch_job_id: jobId,
+              provider: graded.provider || 'AI provider', model: graded.model || 'configured model',
+              status: graded.needsReview ? 'needs_review' : 'completed',
+              input_summary: { source_file: file.name },
+              output_summary: { question_count: questions.length, percentage: percent, review_notes: graded.reviewNotes || [] },
+            });
+            const fileStatus = graded.needsReview ? 'needs_review' : 'completed';
+            const { error: fileUpdateError } = await supabase.from('batch_job_files').update({
+              status: fileStatus, detected_student_name: studentName,
+              error_message: graded.needsReview ? (graded.reviewNotes || []).join('; ') : null,
+            }).eq('id', file.id);
+            if (fileUpdateError) throw fileUpdateError;
+            const result: Result = {
+              id: assessmentId, assessmentId, schemePath: job.marking_scheme_path, paperPath: file.storagePath,
+              student: { name: studentName, id: studentData.id || '', className: studentData.className || '' },
+              courseName: activeCourse.name, workbookName: activeWorkbook?.name || '', date: new Date().toISOString(),
+              questions, total, maximum, percentage: percent, grade: gradeFor(percent),
+              feedback: graded.overallFeedback || '', paperName: file.name,
+            };
+            setResults(current => [result, ...current]);
+            setBatchFiles(current => current.map(item => item.id === file.id ? { ...item, status: graded.needsReview ? 'Needs review' : 'Completed' } : item));
+            if (graded.needsReview) needsReview++;
+            completed++;
+            jobCompleted++;
+          } catch (cause) {
+            const message = cause instanceof Error ? cause.message : 'Processing failed.';
+            await supabase.from('batch_job_files').update({ status: 'needs_review', error_message: message }).eq('id', file.id);
+            setBatchFiles(current => current.map(item => item.id === file.id ? { ...item, status: 'Needs review' } : item));
+            needsReview++;
+          }
+          await supabase.from('batch_jobs').update({ completed_files: jobCompleted }).eq('id', jobId);
+        }
+        await supabase.from('batch_jobs').update({ status: 'completed', completed_files: jobCompleted }).eq('id', jobId);
+      }
+      setToast('Batch finished: ' + completed + ' paper(s) graded; ' + needsReview + ' need attention.');
+    } finally {
+      setBatchBusy(false);
     }
   };
   const deleteBatchFile = async (id: string) => {
