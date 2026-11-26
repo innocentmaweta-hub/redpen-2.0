@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Activity, Archive, ArrowLeft, Award, BarChart3, BookOpen, Bot, Check, CheckCircle2,
   ChevronDown, ChevronRight, CircleHelp, ClipboardList, Clock3, FilePlus2, FileText,
@@ -53,6 +53,7 @@ function App() {
   const [mobileNav, setMobileNav] = useState(false);
 
   useEffect(() => { localStorage.setItem(STORE, JSON.stringify({ workbooks, results })); }, [workbooks, results]);
+  useEffect(() => () => { if (paperUrl) URL.revokeObjectURL(paperUrl); }, [paperUrl]);
   useEffect(() => { if (!toast) return; const timer = window.setTimeout(() => setToast(''), 2800); return () => window.clearTimeout(timer); }, [toast]);
   const activeWorkbook = workbooks.find(w => w.id === activeWorkbookId) || null;
   const activeCourse = activeWorkbook?.courses.find(c => c.id === activeCourseId) || activeWorkbook?.courses[0] || null;
