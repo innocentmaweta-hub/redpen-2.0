@@ -289,6 +289,7 @@ export type Database = {
           id: string
           maximum_score: number
           owner_id: string
+          paper_annotations: Json
           percentage: number
           question_scores: Json
           score: number
@@ -301,6 +302,7 @@ export type Database = {
           id?: string
           maximum_score?: number
           owner_id: string
+          paper_annotations?: Json
           percentage?: number
           question_scores?: Json
           score?: number
@@ -313,6 +315,7 @@ export type Database = {
           id?: string
           maximum_score?: number
           owner_id?: string
+          paper_annotations?: Json
           percentage?: number
           question_scores?: Json
           score?: number
