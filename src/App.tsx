@@ -263,7 +263,7 @@ function App({ user }: { user: User }) {
         const { error: marksUpdateError } = await supabase.from('grading_results').update({
           score: earnedMarks, maximum_score: totalMarks, percentage,
           grade: gradeFor(percentage), feedback: overallFeedback,
-          question_scores: questions.map(q => ({ ...q })),
+          question_scores: questions.map(q => ({ ...q })), paper_annotations: paperAnnotations,
         }).eq('assessment_id', reviewContext.assessmentId);
         if (marksUpdateError) throw marksUpdateError;
         const { error: assessmentUpdateError } = await supabase.from('assessments').update({ status: 'completed' }).eq('id', reviewContext.assessmentId);
@@ -276,7 +276,7 @@ function App({ user }: { user: User }) {
           student: { ...student }, courseName: activeCourse.name, workbookName: activeWorkbook?.name || '',
           date: new Date().toISOString(), questions: questions.map(q => ({ ...q })),
           total: earnedMarks, maximum: totalMarks, percentage, grade: gradeFor(percentage),
-          feedback: overallFeedback, paperName: paper?.name || '',
+          feedback: overallFeedback, paperName: paper?.name || '', paperAnnotations: { ...paperAnnotations },
         };
         setResults(current => current.map(item => item.assessmentId === reviewContext.assessmentId ? revised : item));
         setBatchFiles(current => current.map(item => item.storagePath === reviewContext.paperPath ? { ...item, status: 'Completed' } : item));
@@ -329,7 +329,7 @@ function App({ user }: { user: User }) {
       const { error: resultError } = await supabase.from('grading_results').insert({
         owner_id: user.id, assessment_id: assessmentId, score: earnedMarks,
         maximum_score: totalMarks, percentage, grade: gradeFor(percentage),
-        feedback: overallFeedback, question_scores: questions.map(q => ({ ...q })),
+        feedback: overallFeedback, question_scores: questions.map(q => ({ ...q })), paper_annotations: paperAnnotations,
       });
       if (resultError) {
         await supabase.from('assessments').delete().eq('id', assessmentId);
@@ -342,7 +342,7 @@ function App({ user }: { user: User }) {
         student: { ...student }, courseName: activeCourse.name, workbookName: activeWorkbook?.name || '',
         date: new Date().toISOString(), questions: questions.map(q => ({ ...q })), total: earnedMarks,
         maximum: totalMarks, percentage, grade: gradeFor(percentage), feedback: overallFeedback,
-        paperName: paper?.name || '',
+        paperName: paper?.name || '', paperAnnotations: { ...paperAnnotations },
       };
       if (aiGradingMeta) {
         const { error: aiLogError } = await supabase.from('ai_grading_runs').insert({
@@ -389,7 +389,81 @@ function App({ user }: { user: User }) {
   };
   const addQuestion = () => setQuestions(current => [...current, { id: uid(), label: `Question ${current.length + 1}`, max: 10, score: 0, feedback: '' }]);
   const updateQuestion = (id: string, patch: Partial<Question>) => setQuestions(current => current.map(q => q.id === id ? { ...q, ...patch } : q));
-  const sendYaza = () => { const value = yazaInput.trim(); if (!value) return; setYazaMessages(m => [...m, { role:'user', text:value }, { role:'assistant', text:'I can currently guide you through the RedPen screens and workflow. Automated marking requires an AI grading provider to be connected; I will not invent marks or claim to have assessed a paper.' }]); setYazaInput(''); };
+  const sendYaza = async () => {
+    const value = yazaInput.trim();
+    if (!value || yazaBusy) return;
+    const history = [...yazaMessages, { role: 'user' as const, text: value }];
+    setYazaMessages(history);
+    setYazaInput('');
+    setYazaBusy(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('yaza-assistant', {
+        body: {
+          message: value,
+          history: yazaMessages.slice(-10),
+          appContext: {
+            screen, mode, student, questions, overallFeedback,
+            paperUploaded: Boolean(paper), markingSchemeUploaded: Boolean(scheme) || noScheme,
+            noScheme, workbook: activeWorkbook?.name || null, course: activeCourse?.name || null,
+            resultsCount: results.length,
+          },
+        },
+      });
+      if (error || data?.error) throw new Error(data?.error || error?.message || 'Yaza could not respond.');
+      const outcomes: string[] = [];
+      for (const action of (Array.isArray(data?.actions) ? data.actions : [])) {
+        const args = action.args || {};
+        switch (action.name) {
+          case 'navigate_screen':
+            if (['dashboard','grade','results','history','batch','institutions','settings'].includes(args.screen)) { navigate(args.screen); outcomes.push('Opened ' + args.screen + '.'); }
+            break;
+          case 'update_student_fields':
+            setStudent(current => ({ name: args.name ?? current.name, id: args.student_id ?? current.id, className: args.class_name ?? current.className }));
+            outcomes.push('Updated the student information form.');
+            break;
+          case 'set_marking_mode':
+            if (args.mode === 'manual' || args.mode === 'ai') { setMode(args.mode); outcomes.push('Switched to ' + args.mode + ' marking.'); }
+            break;
+          case 'add_question':
+            if (typeof args.label === 'string' && Number(args.maximum_mark) > 0) {
+              setQuestions(current => [...current, { id: uid(), label: args.label, max: Number(args.maximum_mark), score: 0, feedback: '' }]);
+              outcomes.push('Added ' + args.label + '.');
+            }
+            break;
+          case 'update_question': {
+            const index = Number(args.question_number) - 1;
+            const target = questions[index];
+            if (target) {
+              const patch: Partial<Question> = {};
+              if (args.score !== undefined && Number.isFinite(Number(args.score))) patch.score = Number(args.score);
+              if (typeof args.feedback === 'string') patch.feedback = args.feedback;
+              if (patch.score === undefined || (patch.score >= 0 && patch.score <= target.max)) {
+                updateQuestion(target.id, patch);
+                outcomes.push('Updated ' + target.label + '.');
+              } else outcomes.push('Skipped an invalid mark for ' + target.label + '.');
+            }
+            break;
+          }
+          case 'set_overall_feedback':
+            if (typeof args.feedback === 'string') { setOverallFeedback(args.feedback); outcomes.push('Updated overall feedback.'); }
+            break;
+          case 'run_ai_marking':
+            if (window.confirm('Yaza wants to run AI marking on the currently uploaded paper. Continue?')) {
+              outcomes.push(await runAiGrading() ? 'AI marking completed. Review the draft before saving.' : 'AI marking did not complete.');
+            } else outcomes.push('AI marking cancelled.');
+            break;
+          case 'save_assessment':
+            if (window.confirm('Yaza wants to save this grading result to your RedPen records. Continue?')) { await saveResult(); outcomes.push('Save was requested. Check the app notification for the result.'); }
+            else outcomes.push('Saving cancelled.');
+            break;
+        }
+      }
+      const reply = String(data?.reply || 'I have processed your request.');
+      setYazaMessages(current => [...current, { role: 'assistant', text: reply + (outcomes.length ? '\n\n' + outcomes.join(' ') : '') }]);
+    } catch (cause) {
+      setYazaMessages(current => [...current, { role: 'assistant', text: cause instanceof Error ? cause.message : 'Yaza could not respond. Please try again.' }]);
+    } finally { setYazaBusy(false); }
+  };
   const addBatch = async (files: FileList | null) => {
     if (!files?.length) return;
     if (!batchScheme && !batchNoScheme) { setToast('Upload a marking scheme or select No marking scheme before adding papers.'); return; }
@@ -496,6 +570,7 @@ function App({ user }: { user: User }) {
       const aiLog = aiLogResponse.data;
       if (paperUrl) URL.revokeObjectURL(paperUrl);
       setPaper(paperFile);
+      setPaperAnnotations(result.paperAnnotations || {});
       setPaperUrl(URL.createObjectURL(paperBlob));
       setScheme(schemeFile);
       setNoScheme(!schemeFile);
@@ -739,8 +814,8 @@ function App({ user }: { user: User }) {
         {screen==='grade' && <section className="screen-stack"><PageHeading eyebrow="MARKING WORKSPACE" title="Grade a paper" description="Set up the assessment, review the student's paper and record marks."/><div className="context-strip"><div><BookOpen size={16}/><span>{activeWorkbook?.name || 'No workbook selected'}</span><ChevronDown size={13}/></div><span className="strip-dot"/><span>{activeCourse ? activeCourse.code+' · '+activeCourse.name : 'No course selected'}</span><button onClick={() => setModal(activeWorkbook?'course':'workbook')}>{activeWorkbook?'Add course':'Create workbook'}</button></div>
           <div className="grade-grid"><div className="grade-main"><div className="panel"><PanelTitle number="01" title="Student information" subtitle="Identify whose paper you are marking."/><div className="form-grid"><Field label="Student name"><input value={student.name} onChange={e=>setStudent(s=>({...s,name:e.target.value}))} placeholder="Enter full name"/></Field><Field label="Student ID / Examination number"><input value={student.id} onChange={e=>setStudent(s=>({...s,id:e.target.value}))} placeholder="e.g. MSCE-2026-001"/></Field><Field label="Class / Form" wide><input value={student.className} onChange={e=>setStudent(s=>({...s,className:e.target.value}))} placeholder="e.g. Form 4"/></Field></div></div>
           <div className="panel"><PanelTitle number="02" title="Assessment materials" subtitle="Use an official scheme or let AI propose provisional criteria."/><label className="no-scheme-choice"><input type="checkbox" checked={noScheme} onChange={e=>{setNoScheme(e.target.checked);if(e.target.checked)setScheme(null);}}/><span><strong>No marking scheme</strong><small>AI will propose criteria and maximum marks from the questions. Teacher review is mandatory.</small></span></label><div className="upload-grid">{!noScheme && <UploadCard label="Marking scheme" hint="PDF, image or text · up to 25 MB" file={scheme} onFile={setScheme}/>}<UploadCard label="Student answer paper" hint="PDF or image · up to 25 MB" file={paper} onFile={file=>file?onPaper(file):setPaper(null)}/></div></div>
-          <div className="panel"><div className="panel-heading"><PanelTitle number="03" title="Question-by-question marking" subtitle="Enter marks awarded against the marking scheme."/><span className="manual-pill">{mode === "ai" ? <Sparkles size={13}/> : <ShieldCheck size={13}/>} {mode === "ai" ? "AI-assisted draft" : "Manual assessment"}</span></div><div className="notice"><InfoIcon/> {mode === "ai" ? "AI has drafted marks against the uploaded scheme. Review every question and adjust any mark before saving." : "Marks are entered by the marker. RedPen calculates totals and grades; it does not automatically assess the uploaded paper in this mode."}</div><div className="question-list">{questions.map((q,i)=><div className="question-row" key={q.id}><div className="question-index">{String(i+1).padStart(2,'0')}</div><div className="question-fields"><input className="question-label" value={q.label} onChange={e=>updateQuestion(q.id,{label:e.target.value})}/><div className="question-inputs"><label><span>AWARDED</span><input type="number" min="0" max={q.max} value={q.score} onChange={e=>updateQuestion(q.id,{score:Number(e.target.value)})}/></label><span className="out-of">/</span><label><span>MAXIMUM</span><input type="number" min="1" value={q.max} onChange={e=>updateQuestion(q.id,{max:Number(e.target.value)})}/></label></div><input className="feedback-input" value={q.feedback} onChange={e=>updateQuestion(q.id,{feedback:e.target.value})} placeholder="Feedback for this question (optional)"/></div><button className="icon-button danger-quiet" onClick={()=>setQuestions(current=>current.filter(x=>x.id!==q.id))} title="Remove question"><Trash2 size={15}/></button></div>)}</div><button className="text-action" onClick={addQuestion}><Plus size={15}/> Add question</button></div>
-          <div className="panel"><PanelTitle number="04" title="Overall feedback" subtitle="Add a summary comment for the student (optional)."/><textarea className="textarea" rows={3} value={overallFeedback} onChange={e=>setOverallFeedback(e.target.value)} placeholder="Write constructive feedback..."/></div>
+          <div className="panel"><PanelTitle number="03" title="Paper annotation" subtitle="Mark directly on the original paper. Your ink, ticks and notes are saved with this assessment."/><ManualPaperCanvas file={paper} annotations={paperAnnotations} onChange={setPaperAnnotations}/></div><div className="panel"><div className="panel-heading"><PanelTitle number="04" title="Question-by-question marking" subtitle="Enter marks awarded against the marking scheme."/><span className="manual-pill">{mode === "ai" ? <Sparkles size={13}/> : <ShieldCheck size={13}/>} {mode === "ai" ? "AI-assisted draft" : "Manual assessment"}</span></div><div className="notice"><InfoIcon/> {mode === "ai" ? "AI has drafted marks against the uploaded scheme. Review every question and adjust any mark before saving." : "Marks are entered by the marker. RedPen calculates totals and grades; it does not automatically assess the uploaded paper in this mode."}</div><div className="question-list">{questions.map((q,i)=><div className="question-row" key={q.id}><div className="question-index">{String(i+1).padStart(2,'0')}</div><div className="question-fields"><input className="question-label" value={q.label} onChange={e=>updateQuestion(q.id,{label:e.target.value})}/><div className="question-inputs"><label><span>AWARDED</span><input type="number" min="0" max={q.max} value={q.score} onChange={e=>updateQuestion(q.id,{score:Number(e.target.value)})}/></label><span className="out-of">/</span><label><span>MAXIMUM</span><input type="number" min="1" value={q.max} onChange={e=>updateQuestion(q.id,{max:Number(e.target.value)})}/></label></div><input className="feedback-input" value={q.feedback} onChange={e=>updateQuestion(q.id,{feedback:e.target.value})} placeholder="Feedback for this question (optional)"/></div><button className="icon-button danger-quiet" onClick={()=>setQuestions(current=>current.filter(x=>x.id!==q.id))} title="Remove question"><Trash2 size={15}/></button></div>)}</div><button className="text-action" onClick={addQuestion}><Plus size={15}/> Add question</button></div>
+          <div className="panel"><PanelTitle number="05" title="Overall feedback" subtitle="Add a summary comment for the student (optional)."/><textarea className="textarea" rows={3} value={overallFeedback} onChange={e=>setOverallFeedback(e.target.value)} placeholder="Write constructive feedback..."/></div>
           <div className="grade-footer"><div className="score-preview"><span>LIVE TOTAL</span><strong>{earnedMarks} <small>/ {totalMarks}</small></strong><em>{percentage}% · {gradeFor(percentage)}</em></div><div className="grade-actions">{mode === "ai" && <button className="secondary-button" onClick={() => runAiGrading()} disabled={aiBusy || (!scheme && !noScheme) || !paper}>{aiBusy ? <span className="spin-inline"/> : <Sparkles size={16}/>} {aiBusy ? "Marking…" : "Run AI marking"}</button>}<button className="primary-button" onClick={saveResult}><Save size={16}/> Save grading result</button></div></div>
           </div><aside className="grade-aside"><div className="panel preview-panel"><div className="aside-title"><span>STUDENT PAPER</span><span className={paper?'status-ready':'status-pending'}>{paper?'UPLOADED':'AWAITING FILE'}</span></div>{paperUrl && paper?.type.startsWith('image/')?<img className="paper-image" src={paperUrl} alt="Student paper preview"/>:paperUrl && paper?.type==='application/pdf'?<iframe className="paper-frame" src={paperUrl} title="Student paper preview"/>:<div className="paper-empty"><FileText size={34}/><strong>No paper uploaded</strong><span>Upload a PDF or image to preview it here.</span></div>}{paper && <div className="file-meta"><FileText size={14}/><span>{paper.name}</span></div>}</div><div className="panel scheme-summary"><div className="aside-title">MARKING SCHEME</div>{noScheme?<p>AI-generated criteria · teacher approval required.</p>:scheme?<div className="file-meta"><CheckCircle2 size={15}/><span>{scheme.name}</span></div>:<p>No marking scheme uploaded yet.</p>}<div className="divider"/><div className="summary-line"><span>Questions</span><strong>{questions.length}</strong></div><div className="summary-line"><span>Total possible marks</span><strong>{totalMarks}</strong></div></div><div className="ai-note"><Sparkles size={17}/><div><strong>AI-assisted marking</strong><p>{aiGradingMeta ? ("Drafted with " + aiGradingMeta.provider + " · " + aiGradingMeta.model + ". Check all marks before saving.") : "Upload a scheme and answer paper, choose AI mode, then run AI marking. Review the draft before saving."}</p></div></div></aside></div></section>}
         {screen==='results' && <section className="screen-stack"><PageHeading eyebrow="ASSESSMENT OUTPUT" title="Results" description="Filter saved assessments by course, institution or workbook, then export exactly the records shown."/><div className="panel results-filter-panel"><div className="results-filter-heading"><div><strong>Choose results</strong><span>Combine filters to narrow the records shown and exported.</span></div><button className="text-action" onClick={()=>{setResultCourseFilter('');setResultInstitutionFilter('');setResultWorkbookFilter('');setSearch('');}}>Clear filters</button></div><div className="results-filter-grid"><Field label="Course"><select value={resultCourseFilter} onChange={e=>setResultCourseFilter(e.target.value)}><option value="">All courses</option>{resultCourses.map(item=><option key={item.id} value={item.id}>{item.name}</option>)}</select></Field><Field label="Institution"><select value={resultInstitutionFilter} onChange={e=>setResultInstitutionFilter(e.target.value)}><option value="">All institutions</option>{resultInstitutions.map(name=><option key={name} value={name}>{name}</option>)}</select></Field><Field label="Workbook"><select value={resultWorkbookFilter} onChange={e=>setResultWorkbookFilter(e.target.value)}><option value="">All workbooks</option>{resultWorkbooks.map(item=><option key={item.id} value={item.id}>{item.name}</option>)}</select></Field></div><div className="results-filter-footer"><span>{filteredResults.length} of {results.length} results selected</span><div className="report-actions"><button className="secondary-button" onClick={() => void exportResultsExcel(filteredResults.map(r => ({student:r.student.name,studentId:r.student.id,course:r.courseName,institution:r.institutionName || '',workbook:r.workbookName,date:formatDate(r.date),score:r.total,maximum:r.maximum,percentage:r.percentage,grade:r.grade,feedback:r.feedback})))} disabled={!filteredResults.length}><FileText size={15}/> Export Excel</button><button className="secondary-button" onClick={() => exportResultsPdf(filteredResults.map(r => ({student:r.student.name,studentId:r.student.id,course:r.courseName,institution:r.institutionName || '',workbook:r.workbookName,date:formatDate(r.date),score:r.total,maximum:r.maximum,percentage:r.percentage,grade:r.grade,feedback:r.feedback})))} disabled={!filteredResults.length}><Printer size={15}/> Export PDF</button></div></div></div><div className="metric-grid compact"><Metric icon={Users} label="Students assessed" value={filteredResults.length}/><Metric icon={BarChart3} label="Average score" value={filteredResults.length?Math.round(filteredResults.reduce((s,r)=>s+r.percentage,0)/filteredResults.length)+'%':'—'}/><Metric icon={Award} label="Pass rate" value={filteredResults.length?Math.round(filteredResults.filter(r=>r.percentage>=50).length/filteredResults.length*100)+'%':'—'}/></div><ResultsTable rows={filteredResults} onDelete={deleteResult} onPreview={openSavedDocumentPreview} previewBusyId={batchPreviewBusyId} onReview={openResultForReview} reviewBusyId={batchReviewBusyId}/></section>}
