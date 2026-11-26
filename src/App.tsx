@@ -16,7 +16,7 @@ type Course = { id: string; code: string; name: string; year: string; term: stri
 type Workbook = { id: string; name: string; institution: string; createdAt: string; courses: Course[] };
 type Student = { name: string; id: string; className: string };
 type Result = { id: string; assessmentId?: string; schemePath?: string; paperPath?: string; student: Student; courseName: string; workbookName: string; date: string; questions: Question[]; total: number; maximum: number; percentage: number; grade: string; feedback: string; paperName: string; };
-type BatchFile = { id: string; name: string; size: number; status: 'Ready' | 'Needs review' };
+type BatchFile = { id: string; name: string; size: number; status: 'Ready' | 'Needs review'; storagePath?: string; batchJobId?: string };
 const STORE = 'redpen-2.0-workspace-v1';
 const uid = () => crypto.randomUUID();
 const starter: Workbook[] = [];
@@ -68,6 +68,23 @@ function App({ user }: { user: User }) {
   }, [workbooks, results, user.id]);
   useEffect(() => () => { if (paperUrl) URL.revokeObjectURL(paperUrl); }, [paperUrl]);
   useEffect(() => { if (!toast) return; const timer = window.setTimeout(() => setToast(''), 2800); return () => window.clearTimeout(timer); }, [toast]);
+  useEffect(() => {
+    let alive = true;
+    const loadLatestBatch = async () => {
+      const { data, error } = await supabase.from('batch_jobs')
+        .select('id, batch_job_files(id,original_filename,file_size_bytes,status,storage_path)')
+        .eq('owner_id', user.id).order('created_at', { ascending: false }).limit(1).maybeSingle();
+      if (!alive) return;
+      if (error) { console.error('Could not load batch queue:', error.message); return; }
+      if (data) setBatchFiles((data.batch_job_files || []).map(file => ({
+        id: file.id, name: file.original_filename, size: Number(file.file_size_bytes || 0),
+        status: file.status === 'needs_review' ? 'Needs review' as const : 'Ready' as const,
+        storagePath: file.storage_path, batchJobId: data.id,
+      })));
+    };
+    void loadLatestBatch();
+    return () => { alive = false; };
+  }, [user.id]);
   const activeWorkbook = workbooks.find(w => w.id === activeWorkbookId) || null;
   const activeCourse = activeWorkbook?.courses.find(c => c.id === activeCourseId) || activeWorkbook?.courses[0] || null;
   const totalMarks = questions.reduce((sum, q) => sum + Math.max(0, Number(q.max) || 0), 0);
@@ -164,7 +181,58 @@ function App({ user }: { user: User }) {
   const addQuestion = () => setQuestions(current => [...current, { id: uid(), label: `Question ${current.length + 1}`, max: 10, score: 0, feedback: '' }]);
   const updateQuestion = (id: string, patch: Partial<Question>) => setQuestions(current => current.map(q => q.id === id ? { ...q, ...patch } : q));
   const sendYaza = () => { const value = yazaInput.trim(); if (!value) return; setYazaMessages(m => [...m, { role:'user', text:value }, { role:'assistant', text:'I can currently guide you through the RedPen screens and workflow. Automated marking requires an AI grading provider to be connected; I will not invent marks or claim to have assessed a paper.' }]); setYazaInput(''); };
-  const addBatch = (files: FileList | null) => { if (!files) return; setBatchFiles(current => [...current, ...Array.from(files).map(f => ({ id: uid(), name: f.name, size: f.size, status: 'Ready' as const }))]); };
+  const addBatch = async (files: FileList | null) => {
+    if (!files?.length) return;
+    const selected = Array.from(files);
+    const { data: job, error: jobError } = await supabase.from('batch_jobs').insert({
+      owner_id: user.id, workbook_id: activeWorkbook?.id || null,
+      course_id: activeCourse?.id || null, status: 'queued', total_files: selected.length,
+    }).select('id').single();
+    if (jobError) { setToast(`Could not create batch: ${jobError.message}`); return; }
+    const uploaded: BatchFile[] = [];
+    for (const file of selected) {
+      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const path = `${user.id}/batch/${job.id}/${uid()}-${safeName}`;
+      const { error: uploadError } = await supabase.storage.from('redpen-assessment-files').upload(path, file, {
+        contentType: file.type || 'application/octet-stream', upsert: false,
+      });
+      if (uploadError) { console.error('Batch file upload failed:', uploadError.message); continue; }
+      const { data: fileRow, error: rowError } = await supabase.from('batch_job_files').insert({
+        owner_id: user.id, batch_job_id: job.id, storage_path: path,
+        original_filename: file.name, file_size_bytes: file.size, status: 'queued',
+      }).select('id').single();
+      if (rowError) {
+        await supabase.storage.from('redpen-assessment-files').remove([path]);
+        console.error('Batch file record failed:', rowError.message);
+        continue;
+      }
+      uploaded.push({ id: fileRow.id, name: file.name, size: file.size, status: 'Ready', storagePath: path, batchJobId: job.id });
+    }
+    if (uploaded.length) {
+      await supabase.from('batch_jobs').update({ total_files: uploaded.length }).eq('id', job.id);
+      setBatchFiles(current => [...current, ...uploaded]);
+      setToast(`${uploaded.length} paper(s) uploaded securely to your batch queue.`);
+    } else {
+      await supabase.from('batch_jobs').delete().eq('id', job.id);
+      setToast('No papers could be uploaded. Check the file type and try again.');
+    }
+  };
+  const deleteBatchFile = async (id: string) => {
+    const file = batchFiles.find(item => item.id === id);
+    const { error } = await supabase.from('batch_job_files').delete().eq('id', id);
+    if (error) { setToast(`Could not remove paper: ${error.message}`); return; }
+    if (file?.storagePath) await supabase.storage.from('redpen-assessment-files').remove([file.storagePath]);
+    setBatchFiles(current => current.filter(item => item.id !== id));
+  };
+  const clearBatch = async () => {
+    if (!batchFiles.length) return;
+    const ids = batchFiles.map(file => file.id);
+    const paths = batchFiles.map(file => file.storagePath).filter((path): path is string => Boolean(path));
+    const { error } = await supabase.from('batch_job_files').delete().in('id', ids);
+    if (error) { setToast(`Could not clear batch: ${error.message}`); return; }
+    if (paths.length) await supabase.storage.from('redpen-assessment-files').remove(paths);
+    setBatchFiles([]);
+  };
   const deleteResult = async (id: string) => {
     const row = results.find(item => item.id === id);
     if (row?.assessmentId) {
@@ -202,7 +270,7 @@ function App({ user }: { user: User }) {
           </div><aside className="grade-aside"><div className="panel preview-panel"><div className="aside-title"><span>STUDENT PAPER</span><span className={paper?'status-ready':'status-pending'}>{paper?'UPLOADED':'AWAITING FILE'}</span></div>{paperUrl && paper?.type.startsWith('image/')?<img className="paper-image" src={paperUrl} alt="Student paper preview"/>:paperUrl && paper?.type==='application/pdf'?<iframe className="paper-frame" src={paperUrl} title="Student paper preview"/>:<div className="paper-empty"><FileText size={34}/><strong>No paper uploaded</strong><span>Upload a PDF or image to preview it here.</span></div>}{paper && <div className="file-meta"><FileText size={14}/><span>{paper.name}</span></div>}</div><div className="panel scheme-summary"><div className="aside-title">MARKING SCHEME</div>{scheme?<div className="file-meta"><CheckCircle2 size={15}/><span>{scheme.name}</span></div>:<p>No marking scheme uploaded yet.</p>}<div className="divider"/><div className="summary-line"><span>Questions</span><strong>{questions.length}</strong></div><div className="summary-line"><span>Total possible marks</span><strong>{totalMarks}</strong></div></div><div className="ai-note"><Sparkles size={17}/><div><strong>AI-assisted marking</strong><p>AI marking will be enabled when a grading provider and assessment workflow are configured.</p></div></div></aside></div></section>}
         {screen==='results' && <section className="screen-stack"><PageHeading eyebrow="ASSESSMENT OUTPUT" title="Results" description="Review saved student assessments and their final scores."/><div className="metric-grid compact"><Metric icon={Users} label="Students assessed" value={results.length}/><Metric icon={BarChart3} label="Average score" value={results.length?Math.round(results.reduce((s,r)=>s+r.percentage,0)/results.length)+'%':'—'}/><Metric icon={Award} label="Pass rate" value={results.length?Math.round(results.filter(r=>r.percentage>=50).length/results.length*100)+'%':'—'}/></div><ResultsTable rows={filteredResults} onDelete={deleteResult}/></section>}
         {screen==='history' && <section className="screen-stack"><PageHeading eyebrow="YOUR WORK" title="Grading history" description="Find previous assessments and continue reviewing their records."/><ResultsTable rows={filteredResults} onDelete={deleteResult} history/></section>}
-        {screen==='batch' && <section className="screen-stack"><PageHeading eyebrow="MULTIPLE PAPERS" title="Batch grading" description="Prepare a group of student papers for assessment."/><div className="panel batch-panel"><label className="batch-drop"><input type="file" multiple accept=".pdf,image/*" onChange={e=>addBatch(e.target.files)}/><div className="upload-circle"><Upload size={22}/></div><strong>Drop student papers here</strong><span>or browse files · PDF and images · 25 MB per file</span></label>{batchFiles.length>0?<><div className="batch-head"><strong>{batchFiles.length} files added</strong><button className="text-action danger-text" onClick={()=>setBatchFiles([])}>Remove all</button></div>{batchFiles.map(f=><div className="batch-file" key={f.id}><FileText size={17}/><span>{f.name}<small>{(f.size/1024/1024).toFixed(2)} MB</small></span><em>{f.status}</em><button className="icon-button" onClick={()=>setBatchFiles(list=>list.filter(x=>x.id!==f.id))}><X size={15}/></button></div>)}<div className="notice"><InfoIcon/> Batch queue is prepared. Automated processing and student-to-paper matching require the grading engine integration.</div></>:<div className="empty-inline">No papers added yet. Choose several files to prepare a batch.</div>}</div></section>}
+        {screen==='batch' && <section className="screen-stack"><PageHeading eyebrow="MULTIPLE PAPERS" title="Batch grading" description="Prepare a group of student papers for assessment."/><div className="panel batch-panel"><label className="batch-drop"><input type="file" multiple accept=".pdf,image/*" onChange={e=>addBatch(e.target.files)}/><div className="upload-circle"><Upload size={22}/></div><strong>Drop student papers here</strong><span>or browse files · PDF and images · 25 MB per file</span></label>{batchFiles.length>0?<><div className="batch-head"><strong>{batchFiles.length} files added</strong><button className="text-action danger-text" onClick={clearBatch}>Remove all</button></div>{batchFiles.map(f=><div className="batch-file" key={f.id}><FileText size={17}/><span>{f.name}<small>{(f.size/1024/1024).toFixed(2)} MB</small></span><em>{f.status}</em><button className="icon-button" onClick={()=>deleteBatchFile(f.id)}><X size={15}/></button></div>)}<div className="notice"><InfoIcon/> Batch queue is prepared. Automated processing and student-to-paper matching require the grading engine integration.</div></>:<div className="empty-inline">No papers added yet. Choose several files to prepare a batch.</div>}</div></section>}
         {screen==='settings' && <section className="screen-stack"><PageHeading eyebrow="PREFERENCES" title="Settings" description="Manage your secure RedPen cloud workspace."/><div className="settings-grid"><div className="panel"><PanelTitle number="01" title="Workspace storage" subtitle="Your records are synchronised to your private RedPen cloud workspace."/><div className="settings-row"><div><strong>Supabase cloud workspace</strong><p>Workbooks, courses and grading results are backed up to your private RedPen database.</p></div><span className="connection-pill"><span/> Active</span></div><div className="settings-row"><div><strong>Export your data</strong><p>Download a backup of your workbooks and grading records.</p></div><button className="secondary-button" onClick={()=>{const blob=new Blob([JSON.stringify({workbooks,results},null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='redpen-backup.json';a.click();URL.revokeObjectURL(a.href);}}>Export backup</button></div></div><div className="panel"><PanelTitle number="02" title="Integrations" subtitle="Core RedPen cloud services are connected."/><div className="integration-row"><div className="integration-icon"><Sparkles size={17}/></div><div><strong>AI grading provider</strong><p>Not configured · no AI marks will be generated.</p></div><span className="status-pending">NOT CONNECTED</span></div><div className="integration-row"><div className="integration-icon"><Archive size={17}/></div><div><strong>Supabase authentication & storage</strong><p>Sign-in, cloud sync and private assessment-file storage are active.</p></div><span className="connection-pill"><span/> CONNECTED</span></div></div></div></section>}
       </div>
     </main>
